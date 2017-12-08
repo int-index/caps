@@ -125,7 +125,7 @@ or we can add more capabilities:
 do
   config <- readFile "config.yaml"
   networkingImpl <- parseNetworkingConfig config
-  withReaderT (insertCap networkingImpl) $ do
+  withReaderT (addCap networkingImpl) $ do
     -- networking capability added
     resp <- sendRequest req
     ...
@@ -142,10 +142,14 @@ module Monad.Capabilities
     CapabilitiesBuilder(..),
     Cap,
     getCap,
-    type HasCap,
-    insertCap,
     overrideCap,
+    addCap,
+    insertCap,
     withCap,
+
+    -- * Type-level checks
+    type HasCap,
+    type HasNoCap,
 
     -- * Utils
     Coercible1(..),
@@ -286,18 +290,27 @@ type family HasCap cap caps :: Constraint where
        ShowType cap :<>:
        Text " must be available")
 
+-- | Ensure that the @caps@ list does not have an element @cap@.
+type family HasNoCap cap caps :: Constraint where
+  HasNoCap cap (cap  ': _) =
+    TypeError
+      (Text "Capability " :<>:
+       ShowType cap :<>:
+       Text " is already present")
+  HasNoCap cap (cap' ': caps) = HasNoCap cap caps
+  HasNoCap cap '[] = ()
+
 -- | Lookup a capability in a 'Capabilities' map. The 'HasCap' constraint
 -- guarantees that the lookup does not fail.
 getCap :: forall cap m caps. (Cap cap, HasCap cap caps) => Capabilities caps m -> cap (CapsT caps m)
 getCap (Capabilities m) = fromAnyCap (m M.! typeRep (Proxy :: Proxy cap))
 
 unsafeInsertCap ::
-  forall cap m caps caps'.
   Cap cap =>
   cap (CapsT caps' m) ->
   Capabilities caps m ->
   Capabilities caps' m
-unsafeInsertCap cap (unsafeCastCapabilities -> Capabilities caps) =
+unsafeInsertCap (cap :: cap _) (unsafeCastCapabilities -> Capabilities caps) =
   let
     key = typeRep (Proxy :: Proxy cap)
   in
@@ -306,16 +319,23 @@ unsafeInsertCap cap (unsafeCastCapabilities -> Capabilities caps) =
 -- | Extend the set of capabilities. In case the capability is already present,
 -- it will be overriden (as with 'overrideCap'), but occur twice in the type.
 insertCap ::
-  forall cap m caps.
   Cap cap =>
   cap (CapsT (cap ': caps) m) ->
   Capabilities caps m ->
   Capabilities (cap ': caps) m
 insertCap = unsafeInsertCap
 
+-- | Extend the set of capabilities. In case the capability is already present,
+-- a type error occurs.
+addCap ::
+  (Cap cap, HasNoCap cap caps) =>
+  cap (CapsT (cap ': caps) m) ->
+  Capabilities caps m ->
+  Capabilities (cap ': caps) m
+addCap = insertCap
+
 -- | Override the implementation of an existing capability.
 overrideCap ::
-  forall cap m caps.
   (Cap cap, HasCap cap caps) =>
   cap (CapsT caps m) ->
   Capabilities caps m ->
