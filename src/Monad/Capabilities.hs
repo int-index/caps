@@ -48,10 +48,10 @@ we define a helper per method:
 
 @
 logError :: (Monad m, HasCap Logging caps) => String -> CapsT caps m ()
-logError message = withCap $ \cap -> _logError cap message
+logError message = withCap $ \\cap -> _logError cap message
 
 logDebug :: (Monad m, HasCap Logging caps) => String -> CapsT caps m ()
-logDebug message = withCap $ \cap -> _logDebug cap message
+logDebug message = withCap $ \\cap -> _logDebug cap message
 @
 
 We can define other capabilities in a similar manner:
@@ -68,9 +68,10 @@ data FileStorage m =
     }
 @
 
-Implementations of capabilities may be defined over any monad, but
-to use capabilities together, use 'CapsT'. For instance, this
-is how we can define 'FileStorage' using 'Logging':
+Implementations of capabilities may be defined over any monad, but to define
+capabilities that depend on other capabilities, use 'CapsT'. For instance, this
+is how we can define the 'FileStorage' capability using the 'Logging'
+capability:
 
 @
 fileStorageIO :: (MonadIO m, HasCap Logging caps) => FileStorage (CapsT caps m)
@@ -89,7 +90,7 @@ fileStorageIO =
 @
 
 Here the @fileStorageIO@ implementation requires a logging capability,
-but it's not important which one.
+but it's not specified which one.
 
 When we decided what set of capabilities our application needs, we can put them
 together in a 'Capabilities' map and run the application with this map in a
@@ -126,7 +127,8 @@ do
   networkingImpl <- parseNetworkingConfig config
   withReaderT (insertCap networkingImpl) $ do
     -- networking capability added
-    send
+    resp <- sendRequest req
+    ...
 @
 
 -}
@@ -184,7 +186,7 @@ class Coercible1 t where
 -- | The 'Cap' constraint captures two facts about capabilities that
 -- we care about:
 --
--- * a capability must be 'Typeable', so we can identify its at runtime
+-- * a capability must be 'Typeable', so we can identify it at runtime
 --   by its type
 --
 -- * a capability must be 'Coercible1', so we can coerce the base monad
