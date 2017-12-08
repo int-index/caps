@@ -7,12 +7,11 @@ author:              Vladislav Zavialov
 maintainer:          vlad.z.4096@gmail.com
 category:            Control
 build-type:          Simple
-extra-source-files:  ChangeLog.md
 cabal-version:       >=1.10
 
 library
   exposed-modules:     Monad.Capabilities
-  build-depends:       base >=4.10 && <4.11,
+  build-depends:       base >=4.9 && <4.11,
                        mtl,
                        containers
   hs-source-dirs:      src
@@ -20,7 +19,7 @@ library
   ghc-options:         -Wall -fno-warn-unticked-promoted-constructors
 
 test-suite test-examples
-  build-depends:       base >=4.10 && <4.11,
+  build-depends:       base >=4.9 && <4.11,
                        caps,
                        mtl,
                        tasty,
