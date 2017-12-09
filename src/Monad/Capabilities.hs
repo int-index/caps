@@ -238,6 +238,43 @@ newtype Capabilities (caps :: [CapK]) (m :: MonadK) =
 -- ('runReaderT', 'withReaderT') can be used with it.
 type CapsT caps m = ReaderT (Capabilities caps m) m
 
+{-
+
+'unsafeCastCapabilities' can be used to reorder capabilities, remove non-unique
+capabilities, or extend them.
+
+The tricky case is extension. Assume @caps'@ subsumes @caps@, and consider each
+@cap n@ where @n ~ CapsT caps m@ individually. When we cast this to use @caps'@,
+we must know that @cap@ will continue to work correctly.
+
+1. Assume @cap@ uses @n@ in positive position exclusively. This means that the
+   capability defines methods that take @Capabilities caps m@ as input, and
+   it's okay if we pass @Capabilities caps' m@ instead, as we will simply have
+   some unnecessary input.
+
+2. Assume @cap@ uses @n@ in a negative poistion as well. This means that the
+   capability defines method that will be passing @Capabilities caps m@ to
+   other monadic actions. But when we cast to @caps'@, these monadic actions
+   require @Capabilities caps' m@, where @caps'@ subsumes @caps@, so at runtime
+   it's possible that we don't pass all needed capabilities for them.
+
+In order for (2) to be safe, we need to place an additional requirement on
+capabilities which use the provided @Capabilities caps m@ in a negative position:
+
+  The positive occurence of @Capabilities caps m@ must come from a value
+  provided by an occurence of @Capabilities caps m@ in a negative position,
+  unmodified, rather than be constructed.
+
+Essentially, we want capabilities to do only two things with @Capabilities@:
+
+* extract parts of it with 'getCap'
+* pass it along
+
+In this case, even when on types we put @Capabilities caps m@ in a positive
+position (where @caps@ might be insufficient), at runtime we know that these
+capabilities actually contain @caps'@.
+
+-}
 unsafeCastCapabilities :: Capabilities caps m -> Capabilities caps' m
 unsafeCastCapabilities = unsafeCoerce
 
@@ -253,7 +290,7 @@ unsafeCastCapabilities = unsafeCoerce
 data CapabilitiesBuilder (allCaps :: [CapK]) (caps :: [CapK]) (m :: MonadK) where
   AddCap ::
     Cap cap =>
-    (cap (CapsT allCaps m)) ->
+    cap (CapsT allCaps m) ->
     CapabilitiesBuilder allCaps caps m ->
     CapabilitiesBuilder allCaps (cap ': caps) m
   NoCaps :: CapabilitiesBuilder allCaps '[] m
@@ -305,6 +342,7 @@ type family HasNoCap cap caps :: Constraint where
 getCap :: forall cap m caps. (Cap cap, HasCap cap caps) => Capabilities caps m -> cap (CapsT caps m)
 getCap (Capabilities m) = fromAnyCap (m M.! typeRep (Proxy :: Proxy cap))
 
+-- An internal function that adds capabilities.
 unsafeInsertCap ::
   Cap cap =>
   cap (CapsT caps' m) ->
