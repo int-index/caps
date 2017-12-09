@@ -55,10 +55,10 @@ data Logging m = Logging
 instance Coercible1 Logging where
   coerce1 = Coercion
 
-logError :: (Monad m, HasCap Logging caps) => String -> CapsT caps m ()
+logError :: (Monad m, HasCap Logging caps) => String -> CapsT i caps m ()
 logError message = withCap $ \cap -> _logError cap message
 
-logWarning :: (Monad m, HasCap Logging caps) => String -> CapsT caps m ()
+logWarning :: (Monad m, HasCap Logging caps) => String -> CapsT i caps m ()
 logWarning message = withCap $ \cap -> _logWarning cap message
 
 data DB m = DB
@@ -69,10 +69,10 @@ data DB m = DB
 instance Coercible1 DB where
   coerce1 = Coercion
 
-dbGet :: (Monad m, HasCap DB caps) => String -> CapsT caps m String
+dbGet :: (Monad m, HasCap DB caps) => String -> CapsT i caps m String
 dbGet key = withCap $ \cap -> _dbGet cap key
 
-dbPut :: (Monad m, HasCap DB caps) => String -> String -> CapsT caps m ()
+dbPut :: (Monad m, HasCap DB caps) => String -> String -> CapsT i caps m ()
 dbPut key val = withCap $ \cap -> _dbPut cap key val
 
 -------- Effect implementations ----------
@@ -83,13 +83,13 @@ loggingDummy = Logging
     _logWarning = \_ -> return ()
   }
 
-loggingIO :: (MonadIO m, HasCap Logging caps) => Logging (CapsT caps m)
+loggingIO :: (MonadIO m, HasCap Logging caps) => Logging (CapsT i caps m)
 loggingIO = Logging
   { _logError = liftIO . putStrLn,
     _logWarning = logError -- recursive use of capabilities!
   }
 
-dbDummy :: (Monad m, HasCap Logging caps) => DB (CapsT caps m)
+dbDummy :: (Monad m, HasCap Logging caps) => DB (CapsT i caps m)
 dbDummy = DB
   { _dbGet = \key -> do logWarning ("get " ++ key); return "v",
     _dbPut = \key value -> do logWarning ("put " ++ key ++ " " ++ value); return ()

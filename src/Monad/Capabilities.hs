@@ -47,10 +47,10 @@ Then we want to use this capability in the 'CapsT' monad, and for this
 we define a helper per method:
 
 @
-logError :: (Monad m, HasCap Logging caps) => String -> CapsT caps m ()
+logError :: (Monad m, HasCap Logging caps) => String -> CapsT i caps m ()
 logError message = withCap $ \\cap -> _logError cap message
 
-logDebug :: (Monad m, HasCap Logging caps) => String -> CapsT caps m ()
+logDebug :: (Monad m, HasCap Logging caps) => String -> CapsT i caps m ()
 logDebug message = withCap $ \\cap -> _logDebug cap message
 @
 
@@ -74,7 +74,7 @@ is how we can define the 'FileStorage' capability using the 'Logging'
 capability:
 
 @
-fileStorageIO :: (MonadIO m, HasCap Logging caps) => FileStorage (CapsT caps m)
+fileStorageIO :: (MonadIO m, HasCap Logging caps) => FileStorage (CapsT i caps m)
 fileStorageIO =
   FileStorage
     { _readFile = \\path -> do
@@ -153,7 +153,8 @@ module Monad.Capabilities
 
     -- * Utils
     Coercible1(..),
-    Coercion(..)
+    Coercion(..),
+    I
 
   ) where
 
@@ -198,7 +199,7 @@ class Coercible1 t where
 class (Typeable cap, Coercible1 cap) => Cap cap
 instance (Typeable cap, Coercible1 cap) => Cap cap
 
--- | @'Capabilities' caps m@ is a map of capabilities @caps@ over a base monad
+-- | @'Capabilities' i caps m@ is a map of capabilities @caps@ over a base monad
 -- @m@. Consider the following capabilities:
 --
 -- @
@@ -209,7 +210,7 @@ instance (Typeable cap, Coercible1 cap) => Cap cap
 -- We can construct a map of capabilities with the following type:
 --
 -- @
--- capsXY :: Capabilities '[X, Y] IO
+-- capsXY :: Capabilities I '[X, Y] IO
 -- @
 --
 -- In this case, @capsXY@ would be a map with two elements, one at key @X@ and
@@ -230,13 +231,15 @@ instance (Typeable cap, Coercible1 cap) => Cap cap
 -- @IO@, but with the 'CapsT' transformer on top. This means that each
 -- capability has access to all other capabilities and itself.
 --
-newtype Capabilities (caps :: [CapK]) (m :: MonadK) =
-  Capabilities (M.Map TypeRep (AnyCap (CapsT caps m)))
+newtype Capabilities (i :: Type) (caps :: [CapK]) (m :: MonadK) =
+  Capabilities (M.Map TypeRep (AnyCap (CapsT i caps m)))
 
 -- | The 'CapsT' transformer adds access to capabilities. This is a convenience
 -- synonym for 'ReaderT' of 'Capabilities', and all 'ReaderT' functions
 -- ('runReaderT', 'withReaderT') can be used with it.
-type CapsT caps m = ReaderT (Capabilities caps m) m
+type CapsT i caps m = ReaderT (Capabilities i caps m) m
+
+data I
 
 {-
 
@@ -275,7 +278,7 @@ position (where @caps@ might be insufficient), at runtime we know that these
 capabilities actually contain @caps'@.
 
 -}
-unsafeCastCapabilities :: Capabilities caps m -> Capabilities caps' m
+unsafeCastCapabilities :: Capabilities i caps m -> Capabilities i caps' m
 unsafeCastCapabilities = unsafeCoerce
 
 -- | 'CapabilitiesBuilder' is a helper type that serves as input to 'initCaps'.
@@ -290,7 +293,7 @@ unsafeCastCapabilities = unsafeCoerce
 data CapabilitiesBuilder (allCaps :: [CapK]) (caps :: [CapK]) (m :: MonadK) where
   AddCap ::
     Cap cap =>
-    cap (CapsT allCaps m) ->
+    (forall i. cap (CapsT i allCaps m)) ->
     CapabilitiesBuilder allCaps caps m ->
     CapabilitiesBuilder allCaps (cap ': caps) m
   NoCaps :: CapabilitiesBuilder allCaps '[] m
@@ -304,12 +307,12 @@ data CapabilitiesBuilder (allCaps :: [CapK]) (caps :: [CapK]) (m :: MonadK) wher
 --     AddCap yImpl $
 --     NoCaps
 -- @
-initCaps :: forall caps m. CapabilitiesBuilder caps caps m -> Capabilities caps m
+initCaps :: forall caps m. CapabilitiesBuilder caps caps m -> Capabilities I caps m
 initCaps = Capabilities . M.fromList . go
   where
     go ::
       CapabilitiesBuilder caps caps' m ->
-      [(TypeRep, AnyCap (CapsT caps m))]
+      [(TypeRep, AnyCap (CapsT i caps m))]
     go NoCaps = []
     go (AddCap (cap :: cap _) otherCaps) =
       let
@@ -339,15 +342,15 @@ type family HasNoCap cap caps :: Constraint where
 
 -- | Lookup a capability in a 'Capabilities' map. The 'HasCap' constraint
 -- guarantees that the lookup does not fail.
-getCap :: forall cap m caps. (Cap cap, HasCap cap caps) => Capabilities caps m -> cap (CapsT caps m)
+getCap :: forall cap m caps i. (Cap cap, HasCap cap caps) => Capabilities i caps m -> cap (CapsT i caps m)
 getCap (Capabilities m) = fromAnyCap (m M.! typeRep (Proxy :: Proxy cap))
 
 -- An internal function that adds capabilities.
 unsafeInsertCap ::
   Cap cap =>
-  cap (CapsT caps' m) ->
-  Capabilities caps m ->
-  Capabilities caps' m
+  (forall i. cap (CapsT i caps' m)) ->
+  Capabilities I caps m ->
+  Capabilities I caps' m
 unsafeInsertCap (cap :: cap _) (unsafeCastCapabilities -> Capabilities caps) =
   let
     key = typeRep (Proxy :: Proxy cap)
@@ -358,30 +361,30 @@ unsafeInsertCap (cap :: cap _) (unsafeCastCapabilities -> Capabilities caps) =
 -- it will be overriden (as with 'overrideCap'), but occur twice in the type.
 insertCap ::
   Cap cap =>
-  cap (CapsT (cap ': caps) m) ->
-  Capabilities caps m ->
-  Capabilities (cap ': caps) m
+  (forall i. cap (CapsT i (cap ': caps) m)) ->
+  Capabilities I caps m ->
+  Capabilities I (cap ': caps) m
 insertCap = unsafeInsertCap
 
 -- | Extend the set of capabilities. In case the capability is already present,
 -- a type error occurs.
 addCap ::
   (Cap cap, HasNoCap cap caps) =>
-  cap (CapsT (cap ': caps) m) ->
-  Capabilities caps m ->
-  Capabilities (cap ': caps) m
+  (forall i. cap (CapsT i (cap ': caps) m)) ->
+  Capabilities I caps m ->
+  Capabilities I (cap ': caps) m
 addCap = insertCap
 
 -- | Override the implementation of an existing capability.
 overrideCap ::
   (Cap cap, HasCap cap caps) =>
-  cap (CapsT caps m) ->
-  Capabilities caps m ->
-  Capabilities caps m
+  (forall i. cap (CapsT i caps m)) ->
+  Capabilities I caps m ->
+  Capabilities I caps m
 overrideCap = unsafeInsertCap
 
 -- | Extract a capability from 'CapsT' and provide it to a continuation.
-withCap :: (Monad m, Cap cap, HasCap cap caps) => (cap (CapsT caps m) -> CapsT caps m a) -> CapsT caps m a
+withCap :: (Monad m, Cap cap, HasCap cap caps) => (cap (CapsT i caps m) -> CapsT i caps m a) -> CapsT i caps m a
 withCap cont = do
   cap <- asks getCap
   cont cap
