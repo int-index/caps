@@ -52,10 +52,10 @@ but a synonym for 'ReaderT' of 'Capabilities'), and for this we define a helper
 per method:
 
 @
-logError :: (Monad m, HasCap Logging caps) => String -> CapsT caps m ()
+logError :: HasCap Logging caps => String -> CapsT caps m ()
 logError message = withCap $ \\cap -> _logError cap message
 
-logDebug :: (Monad m, HasCap Logging caps) => String -> CapsT caps m ()
+logDebug :: HasCap Logging caps => String -> CapsT caps m ()
 logDebug message = withCap $ \\cap -> _logDebug cap message
 @
 
@@ -408,7 +408,5 @@ overrideCap ::
 overrideCap = unsafeInsertCap
 
 -- | Extract a capability from 'CapsT' and provide it to a continuation.
-withCap :: (Monad m, Cap cap, HasCap cap caps) => (cap (CapsT caps m) -> CapsT caps m a) -> CapsT caps m a
-withCap cont = do
-  cap <- asks getCap
-  cont cap
+withCap :: (Cap cap, HasCap cap caps) => (cap (CapsT caps m) -> CapsT caps m a) -> CapsT caps m a
+withCap cont = ReaderT $ \caps -> runReaderT (cont (getCap caps)) caps

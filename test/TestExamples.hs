@@ -59,10 +59,10 @@ data Logging m = Logging
 instance Coercible1 Logging where
   coerce1 = Coercion
 
-logError :: (Monad m, HasCap Logging caps) => String -> CapsT caps m ()
+logError :: HasCap Logging caps => String -> CapsT caps m ()
 logError message = withCap $ \cap -> _logError cap message
 
-logWarning :: (Monad m, HasCap Logging caps) => String -> CapsT caps m ()
+logWarning :: HasCap Logging caps => String -> CapsT caps m ()
 logWarning message = withCap $ \cap -> _logWarning cap message
 
 data DB m = DB
@@ -73,10 +73,10 @@ data DB m = DB
 instance Coercible1 DB where
   coerce1 = Coercion
 
-dbGet :: (Monad m, HasCap DB caps) => String -> CapsT caps m String
+dbGet :: HasCap DB caps => String -> CapsT caps m String
 dbGet key = withCap $ \cap -> _dbGet cap key
 
-dbPut :: (Monad m, HasCap DB caps) => String -> String -> CapsT caps m ()
+dbPut :: HasCap DB caps => String -> String -> CapsT caps m ()
 dbPut key val = withCap $ \cap -> _dbPut cap key val
 
 -------- Effect implementations ----------
