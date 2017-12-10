@@ -24,6 +24,8 @@ testLoggingOverride = testCase "logging override" $ do
     caps = initCaps $
       AddCap loggingIO $ -- try commenting out this line,
                          -- you get a nice error message
+      -- AddCap loggingDummy $ -- try uncommenting this line,
+                               -- you get a nice error message
       AddCap dbDummy $
       NoCaps
   flip runReaderT caps $ do

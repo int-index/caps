@@ -47,8 +47,9 @@ The dictionary is wrapped in 'CapImpl' to guarantee that it is sufficiently
 polymorphic (this is required to support simultaneous use of monadic actions in
 negative position and capability extension).
 
-Then we want to use this capability in the 'CapsT' monad, and for this
-we define a helper per method:
+Then we want to use this capability in the 'CapsT' monad (which is nothing more
+but a synonym for 'ReaderT' of 'Capabilities'), and for this we define a helper
+per method:
 
 @
 logError :: (Monad m, HasCap Logging caps) => String -> CapsT caps m ()
@@ -73,7 +74,7 @@ data FileStorage m =
 @
 
 Implementations of capabilities may depend on other capabilities, which are
-listed in its signature. For instance, this is how we can define the
+listed in their signature. For instance, this is how we can define the
 'FileStorage' capability using the 'Logging' capability:
 
 @
@@ -110,6 +111,10 @@ flip runReaderT caps $ do
   ...
 @
 
+Capabilities passed to 'initCaps' can depend on each other. The order does not
+matter (although it is reflected in the types), and duplicate capabilities are
+disallowed.
+
 We can override a capability locally:
 
 @
@@ -118,7 +123,6 @@ do
   withReaderT (overrideCap loggingDummy) $ do
     -- logging is disabled here
     writeFile "config-backup.yaml" config
-    resp <- sendRequest req
     ...
 @
 
@@ -255,7 +259,8 @@ newtype CapImpl cap icaps m =
 {-
 
 'unsafeCastCapabilities' can be used to reorder capabilities, remove non-unique
-capabilities, or extend them.
+capabilities, or extend them. It is safe to change 'caps' because we require
+'Coercible1' for each capability.
 
 The tricky case is extension. Assume @caps'@ subsumes @caps@, and consider each
 @cap n@ where @n ~ CapsT caps m@ individually. When we cast this to use @caps'@,
@@ -305,7 +310,7 @@ unsafeCastCapabilities = unsafeCoerce
 -- passed to 'initCaps'.
 data CapabilitiesBuilder (allCaps :: [CapK]) (caps :: [CapK]) (m :: MonadK) where
   AddCap ::
-    (Cap cap, HasCaps icaps allCaps) =>
+    (Cap cap, HasCaps icaps allCaps, HasNoCap cap caps) =>
     CapImpl cap icaps m ->
     CapabilitiesBuilder allCaps caps m ->
     CapabilitiesBuilder allCaps (cap ': caps) m
