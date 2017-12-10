@@ -1,3 +1,5 @@
+{-# LANGUAGE DataKinds #-}
+
 module Main where
 
 import Test.Tasty
@@ -77,20 +79,20 @@ dbPut key val = withCap $ \cap -> _dbPut cap key val
 
 -------- Effect implementations ----------
 
-loggingDummy :: Monad m => Logging m
-loggingDummy = Logging
+loggingDummy :: Monad m => CapImpl Logging '[] m
+loggingDummy = CapImpl $ Logging
   { _logError = \_ -> return (),
     _logWarning = \_ -> return ()
   }
 
-loggingIO :: (MonadIO m, HasCap Logging caps) => Logging (CapsT caps m)
-loggingIO = Logging
+loggingIO :: MonadIO m => CapImpl Logging '[Logging] m
+loggingIO = CapImpl $ Logging
   { _logError = liftIO . putStrLn,
     _logWarning = logError -- recursive use of capabilities!
   }
 
-dbDummy :: (Monad m, HasCap Logging caps) => DB (CapsT caps m)
-dbDummy = DB
+dbDummy :: Monad m => CapImpl DB '[Logging] m
+dbDummy = CapImpl $ DB
   { _dbGet = \key -> do logWarning ("get " ++ key); return "v",
     _dbPut = \key value -> do logWarning ("put " ++ key ++ " " ++ value); return ()
   }

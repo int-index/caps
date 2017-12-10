@@ -32,16 +32,20 @@ for a GADT or a data family (this is intentional).
 We can define implementations as values of this record type:
 
 @
-loggingDummy :: Monad m => Logging m
-loggingDummy = Logging (\\_ -> return ()) (\\_ -> return ())
+loggingDummy :: Monad m => CapImpl Logging '[] m
+loggingDummy = CapImpl $ Logging (\\_ -> return ()) (\\_ -> return ())
 
-loggingIO :: MonadIO m => Logging m
-loggingIO =
+loggingIO :: MonadIO m => CapImpl Logging '[] m
+loggingIO = CapImpl $
   Logging
     { _logError = \\msg -> liftIO . putStrLn $ "[Error] " ++ msg
       _logDebug = \\msg -> liftIO . putStrLn $ "[Debug] " ++ msg
     }
 @
+
+The dictionary is wrapped in 'CapImpl' to guarantee that it is sufficiently
+polymorphic (this is required to support simultaneous use of monadic actions in
+negative position and capability extension).
 
 Then we want to use this capability in the 'CapsT' monad, and for this
 we define a helper per method:
@@ -68,14 +72,13 @@ data FileStorage m =
     }
 @
 
-Implementations of capabilities may be defined over any monad, but to define
-capabilities that depend on other capabilities, use 'CapsT'. For instance, this
-is how we can define the 'FileStorage' capability using the 'Logging'
-capability:
+Implementations of capabilities may depend on other capabilities, which are
+listed in its signature. For instance, this is how we can define the
+'FileStorage' capability using the 'Logging' capability:
 
 @
-fileStorageIO :: (MonadIO m, HasCap Logging caps) => FileStorage (CapsT caps m)
-fileStorageIO =
+fileStorageIO :: MonadIO m => CapImpl FileStorage '[Logging] m
+fileStorageIO = CapImpl $
   FileStorage
     { _readFile = \\path -> do
         logDebug $ "readFile " ++ path
@@ -140,6 +143,7 @@ module Monad.Capabilities
     CapsT,
     initCaps,
     CapabilitiesBuilder(..),
+    CapImpl(..),
     Cap,
     getCap,
     overrideCap,
@@ -149,6 +153,7 @@ module Monad.Capabilities
 
     -- * Type-level checks
     type HasCap,
+    type HasCaps,
     type HasNoCap,
 
     -- * Utils
@@ -238,6 +243,15 @@ newtype Capabilities (caps :: [CapK]) (m :: MonadK) =
 -- ('runReaderT', 'withReaderT') can be used with it.
 type CapsT caps m = ReaderT (Capabilities caps m) m
 
+-- | The 'CapImpl' newtype guarantees that the wrapped capability implementation
+-- is sufficiently polymorphic so that required subtyping properties hold in
+-- methods that take monadic actions as input (negative position).
+--
+-- This rules out using 'addCap', 'insertCap', and 'initCaps' inside capability
+-- implementations in an unsafe manner.
+newtype CapImpl cap icaps m =
+  CapImpl { getCapImpl :: forall caps. HasCaps icaps caps => cap (CapsT caps m) }
+
 {-
 
 'unsafeCastCapabilities' can be used to reorder capabilities, remove non-unique
@@ -274,6 +288,8 @@ In this case, even when on types we put @Capabilities caps m@ in a positive
 position (where @caps@ might be insufficient), at runtime we know that these
 capabilities actually contain @caps'@.
 
+We guarantee this property by the 'CapImpl' newtype.
+
 -}
 unsafeCastCapabilities :: Capabilities caps m -> Capabilities caps' m
 unsafeCastCapabilities = unsafeCoerce
@@ -289,8 +305,8 @@ unsafeCastCapabilities = unsafeCoerce
 -- passed to 'initCaps'.
 data CapabilitiesBuilder (allCaps :: [CapK]) (caps :: [CapK]) (m :: MonadK) where
   AddCap ::
-    Cap cap =>
-    cap (CapsT allCaps m) ->
+    (Cap cap, HasCaps icaps allCaps) =>
+    CapImpl cap icaps m ->
     CapabilitiesBuilder allCaps caps m ->
     CapabilitiesBuilder allCaps (cap ': caps) m
   NoCaps :: CapabilitiesBuilder allCaps '[] m
@@ -311,7 +327,7 @@ initCaps = Capabilities . M.fromList . go
       CapabilitiesBuilder caps caps' m ->
       [(TypeRep, AnyCap (CapsT caps m))]
     go NoCaps = []
-    go (AddCap (cap :: cap _) otherCaps) =
+    go (AddCap (CapImpl cap :: CapImpl cap _ _) otherCaps) =
       let
         key = typeRep (Proxy :: Proxy cap)
       in
@@ -326,6 +342,12 @@ type family HasCap cap caps :: Constraint where
       (Text "Capability " :<>:
        ShowType cap :<>:
        Text " must be available")
+
+-- | Ensure that the @caps@ list subsumes @icaps@. It is equivalent
+-- to a @HasCap icap caps@ constraint for each @icap@ in @icaps@.
+type family HasCaps icaps caps :: Constraint where
+  HasCaps '[] _ = ()
+  HasCaps (icap ': icaps) caps = (HasCap icap caps, HasCaps icaps caps)
 
 -- | Ensure that the @caps@ list does not have an element @cap@.
 type family HasNoCap cap caps :: Constraint where
@@ -344,11 +366,11 @@ getCap (Capabilities m) = fromAnyCap (m M.! typeRep (Proxy :: Proxy cap))
 
 -- An internal function that adds capabilities.
 unsafeInsertCap ::
-  Cap cap =>
-  cap (CapsT caps' m) ->
+  (Cap cap, HasCaps icaps caps') =>
+  CapImpl cap icaps m ->
   Capabilities caps m ->
   Capabilities caps' m
-unsafeInsertCap (cap :: cap _) (unsafeCastCapabilities -> Capabilities caps) =
+unsafeInsertCap (CapImpl cap :: CapImpl cap _ _) (unsafeCastCapabilities -> Capabilities caps) =
   let
     key = typeRep (Proxy :: Proxy cap)
   in
@@ -357,8 +379,8 @@ unsafeInsertCap (cap :: cap _) (unsafeCastCapabilities -> Capabilities caps) =
 -- | Extend the set of capabilities. In case the capability is already present,
 -- it will be overriden (as with 'overrideCap'), but occur twice in the type.
 insertCap ::
-  Cap cap =>
-  cap (CapsT (cap ': caps) m) ->
+  (Cap cap, HasCaps icaps (cap ': caps)) =>
+  CapImpl cap icaps m ->
   Capabilities caps m ->
   Capabilities (cap ': caps) m
 insertCap = unsafeInsertCap
@@ -366,16 +388,16 @@ insertCap = unsafeInsertCap
 -- | Extend the set of capabilities. In case the capability is already present,
 -- a type error occurs.
 addCap ::
-  (Cap cap, HasNoCap cap caps) =>
-  cap (CapsT (cap ': caps) m) ->
+  (Cap cap, HasNoCap cap caps, HasCaps icaps (cap ': caps)) =>
+  CapImpl cap icaps m ->
   Capabilities caps m ->
   Capabilities (cap ': caps) m
 addCap = insertCap
 
 -- | Override the implementation of an existing capability.
 overrideCap ::
-  (Cap cap, HasCap cap caps) =>
-  cap (CapsT caps m) ->
+  (Cap cap, HasCap cap caps, HasCaps icaps caps) =>
+  CapImpl cap icaps m ->
   Capabilities caps m ->
   Capabilities caps m
 overrideCap = unsafeInsertCap
