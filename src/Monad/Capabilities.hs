@@ -1,6 +1,7 @@
 {-# LANGUAGE TypeInType, GADTs, ScopedTypeVariables, FlexibleInstances,
              TypeOperators, ConstraintKinds, TypeFamilies, PartialTypeSignatures,
-             UndecidableInstances, ViewPatterns, RankNTypes, TypeApplications #-}
+             UndecidableInstances, ViewPatterns, RankNTypes, TypeApplications,
+             MultiParamTypeClasses, UndecidableSuperClasses #-}
 
 {-|
 
@@ -159,6 +160,7 @@ module Monad.Capabilities
 
     -- * Default capabilities
     Context(..),
+    HasContext,
     newContext,
     askContext,
     localContext,
@@ -468,16 +470,20 @@ checkCap (Capabilities m) =
 -- capabilities framework.
 newtype Context x (m :: MonadK) = Context x
 
+-- | The 'HasContext' constraint is a shorthand for 'HasCap' of 'Context'.
+class (Typeable x, HasCap (Context x) caps) => HasContext x caps
+instance (Typeable x, HasCap (Context x) caps) => HasContext x caps
+
 -- | Initialize a 'Context' capability.
 newContext :: forall x m. x -> CapImpl (Context x) '[] m
 newContext x = CapImpl (Context x)
 
 -- | Retrieve the context value. Moral equivalent of 'ask'.
-askContext :: (Typeable x, Applicative m) => HasCap (Context x) caps => CapsT caps m x
+askContext :: (HasContext x caps, Applicative m) => CapsT caps m x
 askContext = withCap (\(Context x) -> pure x)
 
 -- | Execute a computation with a modified context value. Moral equivalent of 'local'.
-localContext :: forall x caps m a. (Typeable x, HasCap (Context x) caps) => (x -> x) -> CapsT caps m a -> CapsT caps m a
+localContext :: forall x caps m a. (HasContext x caps) => (x -> x) -> CapsT caps m a -> CapsT caps m a
 localContext f =
   let f' (Context x) = Context (f x)
   in local (adjustCap f')
