@@ -1,6 +1,6 @@
 {-# LANGUAGE TypeInType, GADTs, ScopedTypeVariables, FlexibleInstances,
              TypeOperators, ConstraintKinds, TypeFamilies, PartialTypeSignatures,
-             UndecidableInstances, ViewPatterns, RankNTypes #-}
+             UndecidableInstances, ViewPatterns, RankNTypes, TypeApplications #-}
 
 {-|
 
@@ -154,11 +154,20 @@ module Monad.Capabilities
     addCap,
     insertCap,
     withCap,
+    checkCap,
+    adjustCap,
+
+    -- * Default capabilities
+    Context(..),
+    newContext,
+    askContext,
+    localContext,
 
     -- * Type-level checks
     type HasCap,
     type HasCaps,
     type HasNoCap,
+    HasCapDecision(..),
 
     -- * Utils
     Coercible1(..),
@@ -173,7 +182,8 @@ import GHC.TypeLits (TypeError, ErrorMessage(..))
 import Data.Proxy
 import Data.Coerce
 import Data.Type.Coercion
-import Control.Monad.Reader
+import Data.Type.Equality
+import Control.Monad.Trans.Reader
 import Unsafe.Coerce (unsafeCoerce)
 
 import qualified Data.Map.Lazy as M
@@ -241,6 +251,9 @@ instance (Typeable cap, Coercible1 cap) => Cap cap
 --
 newtype Capabilities (caps :: [CapK]) (m :: MonadK) =
   Capabilities (M.Map TypeRep (AnyCap (CapsT caps m)))
+
+instance Show (Capabilities caps m) where
+  showsPrec n (Capabilities m) = showsPrec n (M.keys m)
 
 -- | The 'CapsT' transformer adds access to capabilities. This is a convenience
 -- synonym for 'ReaderT' of 'Capabilities', and all 'ReaderT' functions
@@ -407,6 +420,67 @@ overrideCap ::
   Capabilities caps m
 overrideCap = unsafeInsertCap
 
+-- | Override the implementation of an existing capability using the previous
+-- implementation. This is a more efficient equivalent to extracting a
+-- capability with 'getCap', adjusting it with a function, and putting it back
+-- with 'overrideCap'.
+adjustCap ::
+  forall cap caps m.
+  (Cap cap, HasCap cap caps) =>
+  (cap (CapsT caps m) -> cap (CapsT caps m)) ->
+  Capabilities caps m ->
+  Capabilities caps m
+adjustCap f (Capabilities caps) =
+  let
+    key = typeRep (Proxy :: Proxy cap)
+  in
+    Capabilities (M.adjust (toAnyCap . f . fromAnyCap) key caps)
+
+
 -- | Extract a capability from 'CapsT' and provide it to a continuation.
 withCap :: (Cap cap, HasCap cap caps) => (cap (CapsT caps m) -> CapsT caps m a) -> CapsT caps m a
 withCap cont = ReaderT $ \caps -> runReaderT (cont (getCap caps)) caps
+
+-- | Evidence that @cap@
+data HasCapDecision cap caps where
+  HasNoCap :: HasNoCap cap caps => HasCapDecision cap caps
+  HasCap :: HasCap cap caps => HasCapDecision cap caps
+
+instance Show (HasCapDecision cap caps) where
+  show HasNoCap = "HasNoCap"
+  show HasCap = "HasCap"
+
+-- | Determine at runtime whether 'HasCap cap caps' or 'HasNoCap cap caps' holds.
+checkCap :: forall cap caps m. Cap cap => Capabilities caps m -> HasCapDecision cap caps
+checkCap (Capabilities m) =
+  let
+    key = typeRep (Proxy :: Proxy cap)
+    hasCap = M.member key m
+  in
+    if hasCap
+    then case fiatUnitConstr @(HasCap cap caps) of Refl -> HasCap
+    else case fiatUnitConstr @(HasNoCap cap caps) of Refl -> HasNoCap
+  where
+    fiatUnitConstr :: c :~: (() :: Constraint)
+    fiatUnitConstr = unsafeCoerce Refl
+
+-- | The 'Context' capability is used to model the @Reader@ effect within the
+-- capabilities framework.
+newtype Context x (m :: MonadK) = Context x
+
+-- | Initialize a 'Context' capability.
+newContext :: forall x m. x -> CapImpl (Context x) '[] m
+newContext x = CapImpl (Context x)
+
+-- | Retrieve the context value. Moral equivalent of 'ask'.
+askContext :: (Typeable x, Applicative m) => HasCap (Context x) caps => CapsT caps m x
+askContext = withCap (\(Context x) -> pure x)
+
+-- | Execute a computation with a modified context value. Moral equivalent of 'local'.
+localContext :: forall x caps m a. (Typeable x, HasCap (Context x) caps) => (x -> x) -> CapsT caps m a -> CapsT caps m a
+localContext f =
+  let f' (Context x) = Context (f x)
+  in local (adjustCap f')
+
+instance Coercible1 (Context x) where
+  coerce1 = Coercion
