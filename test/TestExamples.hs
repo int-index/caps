@@ -1,4 +1,4 @@
-{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DataKinds, RankNTypes, TemplateHaskell #-}
 
 module Main where
 
@@ -8,15 +8,45 @@ import Test.Tasty.HUnit
 import Control.Monad.Reader
 import Monad.Capabilities
 
-main :: IO ()
-main = do
-  defaultMain suite
+-------- Effect declarations ----------
 
-suite :: TestTree
-suite = testGroup "Capabilities"
-  [ testLoggingOverride,
-    testAddingDb
-  ]
+data Logging m = Logging
+  { _logError :: String -> m (),
+    _logWarning :: String -> m ()
+  }
+
+makeCap ''Logging
+
+data DB m = DB
+  { _dbGet :: String -> m String,
+    _dbPut :: String -> String -> m (),
+    _dbWithLock :: forall a. (String -> m a) -> m a
+  }
+
+makeCap ''DB
+
+-------- Effect implementations ----------
+
+loggingDummy :: Monad m => CapImpl Logging '[] m
+loggingDummy = CapImpl $ Logging
+  { _logError = \_ -> return (),
+    _logWarning = \_ -> return ()
+  }
+
+loggingIO :: MonadIO m => CapImpl Logging '[Logging] m
+loggingIO = CapImpl $ Logging
+  { _logError = liftIO . putStrLn,
+    _logWarning = logError -- recursive use of capabilities!
+  }
+
+dbDummy :: Monad m => CapImpl DB '[Logging] m
+dbDummy = CapImpl $ DB
+  { _dbGet = \key -> do logWarning ("get " ++ key); return "v",
+    _dbPut = \key value -> do logWarning ("put " ++ key ++ " " ++ value); return (),
+    _dbWithLock = \m -> m "lock"
+  }
+
+-------- Test implementations ----------
 
 testLoggingOverride :: TestTree
 testLoggingOverride = testCase "logging override" $ do
@@ -49,52 +79,15 @@ testAddingDb = testCase "adding db" $ do
   -- I KNOW THIS IS NOT A PROPER UNIT TEST :)
   -- Check the output in the console manually for now.
 
--------- Effect declarations ----------
 
-data Logging m = Logging
-  { _logError :: String -> m (),
-    _logWarning :: String -> m ()
-  }
+-------- Test tree and Main ----------
 
-instance Coercible1 Logging where
-  coerce1 = Coercion
+main :: IO ()
+main = do
+  defaultMain suite
 
-logError :: HasCap Logging caps => String -> CapsT caps m ()
-logError message = withCap $ \cap -> _logError cap message
-
-logWarning :: HasCap Logging caps => String -> CapsT caps m ()
-logWarning message = withCap $ \cap -> _logWarning cap message
-
-data DB m = DB
-  { _dbGet :: String -> m String,
-    _dbPut :: String -> String -> m ()
-  }
-
-instance Coercible1 DB where
-  coerce1 = Coercion
-
-dbGet :: HasCap DB caps => String -> CapsT caps m String
-dbGet key = withCap $ \cap -> _dbGet cap key
-
-dbPut :: HasCap DB caps => String -> String -> CapsT caps m ()
-dbPut key val = withCap $ \cap -> _dbPut cap key val
-
--------- Effect implementations ----------
-
-loggingDummy :: Monad m => CapImpl Logging '[] m
-loggingDummy = CapImpl $ Logging
-  { _logError = \_ -> return (),
-    _logWarning = \_ -> return ()
-  }
-
-loggingIO :: MonadIO m => CapImpl Logging '[Logging] m
-loggingIO = CapImpl $ Logging
-  { _logError = liftIO . putStrLn,
-    _logWarning = logError -- recursive use of capabilities!
-  }
-
-dbDummy :: Monad m => CapImpl DB '[Logging] m
-dbDummy = CapImpl $ DB
-  { _dbGet = \key -> do logWarning ("get " ++ key); return "v",
-    _dbPut = \key value -> do logWarning ("put " ++ key ++ " " ++ value); return ()
-  }
+suite :: TestTree
+suite = testGroup "Capabilities"
+  [ testLoggingOverride,
+    testAddingDb
+  ]

@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeInType, GADTs, ScopedTypeVariables, FlexibleInstances,
              TypeOperators, ConstraintKinds, TypeFamilies, PartialTypeSignatures,
              UndecidableInstances, ViewPatterns, RankNTypes, TypeApplications,
-             MultiParamTypeClasses, UndecidableSuperClasses #-}
+             MultiParamTypeClasses, UndecidableSuperClasses, TemplateHaskell #-}
 
 {-|
 
@@ -173,7 +173,8 @@ module Monad.Capabilities
 
     -- * Utils
     Coercible1(..),
-    Coercion(..)
+    Coercion(..),
+    makeCap
 
   ) where
 
@@ -181,14 +182,17 @@ import Data.Kind (Type, Constraint)
 import Data.Typeable (Typeable, TypeRep, typeRep)
 import GHC.Exts (Any)
 import GHC.TypeLits (TypeError, ErrorMessage(..))
+import Data.Traversable
 import Data.Proxy
 import Data.Coerce
 import Data.Type.Coercion
 import Data.Type.Equality
+import Data.List (foldl1')
 import Control.Monad.Trans.Reader
 import Unsafe.Coerce (unsafeCoerce)
 
 import qualified Data.Map.Lazy as M
+import qualified Language.Haskell.TH as TH
 
 type MonadK = Type -> Type
 
@@ -490,3 +494,52 @@ localContext f =
 
 instance Coercible1 (Context x) where
   coerce1 = Coercion
+
+makeCap :: TH.Name -> TH.DecsQ
+makeCap capName = do
+  info <- TH.reify capName
+  (vbts, tyVars) <-
+    case info of
+      TH.TyConI (TH.DataD    _ _ tyVars _ [TH.RecC _ vbts] _) -> return (vbts, tyVars)
+      TH.TyConI (TH.NewtypeD _ _ tyVars _ (TH.RecC _ vbts) _) -> return (vbts, tyVars)
+      _ -> fail "Capabilities must be single-constructor record types"
+  (_tyVar, extraTyVars) <-
+    case reverse tyVars of
+      (tv:tvs) -> return (tv, reverse tvs)
+      _ -> fail "Capability must have a monadic parameter"
+  let classHead = foldl1' TH.appT (TH.conT capName : map tyVarBndrT extraTyVars)
+  coercible1_instance_decs <-
+    [d|
+      instance Coercible1 $classHead where
+        coerce1 = Coercion
+    |]
+  method_decs <- for vbts $ \(fieldName, _, ty) -> do
+    methodName <- case TH.nameBase fieldName of
+      ('_':methodName) -> TH.newName methodName
+      _ -> fail "Capability method names must start with underscores"
+    tyArgList <-
+      let
+        toArgList (TH.ArrowT `TH.AppT` a `TH.AppT` b) = a:toArgList b
+        toArgList (TH.ForallT _ _ a) = toArgList a
+        toArgList _ = []
+      in
+        return $ toArgList ty
+    TH.funD methodName
+      [do
+        argNames <- do
+          for (zip [0..] tyArgList) $ \(i, _tyArg) ->
+            TH.newName ("arg" ++ show (i::Int))
+        let
+          pats = map TH.varP argNames
+          args = map TH.varE argNames
+          body = TH.normalB $ do
+            lamName <- TH.newName "cap"
+            TH.appE [e|withCap|] $
+              TH.lam1E (TH.varP lamName) $
+                foldl1' TH.appE (TH.varE fieldName : TH.varE lamName : args)
+        TH.clause pats body []
+      ]
+  return (coercible1_instance_decs ++ method_decs)
+  where
+    tyVarBndrT (TH.PlainTV name) = TH.varT name
+    tyVarBndrT (TH.KindedTV name k) = TH.sigT (TH.varT name) k

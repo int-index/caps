@@ -13,7 +13,8 @@ library
   exposed-modules:     Monad.Capabilities
   build-depends:       base >=4.9 && <4.11,
                        transformers,
-                       containers
+                       containers,
+                       template-haskell
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
