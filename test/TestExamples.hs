@@ -1,4 +1,6 @@
-{-# LANGUAGE DataKinds, RankNTypes, TemplateHaskell #-}
+{-# LANGUAGE DataKinds, TypeFamilies, RankNTypes, UndecidableInstances, TemplateHaskell #-}
+
+{-# OPTIONS -ddump-splices #-}
 
 module Main where
 

@@ -503,20 +503,21 @@ makeCap capName = do
       TH.TyConI (TH.DataD    _ _ tyVars _ [TH.RecC _ vbts] _) -> return (vbts, tyVars)
       TH.TyConI (TH.NewtypeD _ _ tyVars _ (TH.RecC _ vbts) _) -> return (vbts, tyVars)
       _ -> fail "Capabilities must be single-constructor record types"
-  (_tyVar, extraTyVars) <-
+  (mVar, extraTyVars) <-
     case reverse tyVars of
       (tv:tvs) -> return (tv, reverse tvs)
       _ -> fail "Capability must have a monadic parameter"
-  let classHead = foldl1' TH.appT (TH.conT capName : map tyVarBndrT extraTyVars)
+  let capType = foldl1' TH.appT (TH.conT capName : map tyVarBndrT extraTyVars)
   coercible1_instance_decs <-
     [d|
-      instance Coercible1 $classHead where
+      instance Coercible1 $capType where
         coerce1 = Coercion
     |]
-  method_decs <- for vbts $ \(fieldName, _, ty) -> do
-    methodName <- case TH.nameBase fieldName of
-      ('_':methodName) -> TH.newName methodName
-      _ -> fail "Capability method names must start with underscores"
+  methodSpecs <- for vbts $ \(fieldName, _, ty) -> do
+    methodName <-
+      case TH.nameBase fieldName of
+        ('_':methodName) -> return $ TH.mkName methodName
+        _ -> fail "Capability method names must start with underscores"
     tyArgList <-
       let
         toArgList (TH.ArrowT `TH.AppT` a `TH.AppT` b) = a:toArgList b
@@ -524,22 +525,48 @@ makeCap capName = do
         toArgList _ = []
       in
         return $ toArgList ty
-    TH.funD methodName
-      [do
-        argNames <- do
-          for (zip [0..] tyArgList) $ \(i, _tyArg) ->
-            TH.newName ("arg" ++ show (i::Int))
-        let
-          pats = map TH.varP argNames
-          args = map TH.varE argNames
-          body = TH.normalB $ do
-            lamName <- TH.newName "cap"
-            TH.appE [e|withCap|] $
-              TH.lam1E (TH.varP lamName) $
-                foldl1' TH.appE (TH.varE fieldName : TH.varE lamName : args)
-        TH.clause pats body []
+    return (methodName, fieldName, ty, tyArgList)
+  let className = TH.mkName ("Monad" ++ TH.nameBase capName)
+  class_decs <- (:[]) <$>
+    TH.classD
+      (TH.cxt [])
+      className
+      [mVar]
+      []
+      [ TH.sigD methodName (return ty)
+      | (methodName, _, ty, _) <- methodSpecs
       ]
-  return (coercible1_instance_decs ++ method_decs)
+  let
+    methodDec methodName fieldName tyArgList = do
+      TH.funD methodName
+        [do
+          argNames <- do
+            for (zip [0..] tyArgList) $ \(i, _tyArg) ->
+              TH.newName ("arg" ++ show (i::Int))
+          let
+            pats = map TH.varP argNames
+            args = map TH.varE argNames
+            body = TH.normalB $ do
+              lamName <- TH.newName "cap"
+              TH.appE [e|withCap|] $
+                TH.lam1E (TH.varP lamName) $
+                  foldl1' TH.appE (TH.varE fieldName : TH.varE lamName : args)
+          TH.clause pats body []
+        ]
+  instance_decs <- (:[]) <$> do
+    rVar <- TH.newName "r"
+    capsVar <- TH.newName "caps"
+    TH.instanceD
+      (TH.cxt [ [t|HasCap $capType $(TH.varT capsVar)|],
+                [t| $(TH.varT rVar) ~ Capabilities $(TH.varT capsVar) $(tyVarBndrT' mVar) |] ])
+      [t| $(TH.conT className) (ReaderT $(TH.varT rVar) $(tyVarBndrT' mVar)) |]
+      [ methodDec methodName fieldName tyArgList
+      | (methodName, fieldName, _, tyArgList) <- methodSpecs
+      ]
+  return (coercible1_instance_decs ++ class_decs ++ instance_decs)
   where
     tyVarBndrT (TH.PlainTV name) = TH.varT name
     tyVarBndrT (TH.KindedTV name k) = TH.sigT (TH.varT name) k
+
+    tyVarBndrT' (TH.PlainTV name) = TH.varT name
+    tyVarBndrT' (TH.KindedTV name _) = TH.varT name
