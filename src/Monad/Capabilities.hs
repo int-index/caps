@@ -186,13 +186,11 @@ type MonadK = Type -> Type
 
 type CapK = MonadK -> Type
 
-newtype AnyCap (m :: MonadK) = AnyCap (Any m)
+toAnyCap :: CapElem m cap -> CapElem m Any
+toAnyCap = unsafeCoerce
 
-toAnyCap :: cap m -> AnyCap m
-toAnyCap a = AnyCap (unsafeCoerce a)
-
-fromAnyCap :: AnyCap m -> cap m
-fromAnyCap (AnyCap a) = unsafeCoerce a
+fromAnyCap :: CapElem m Any -> CapElem m cap
+fromAnyCap = unsafeCoerce
 
 -- | @'Capabilities' caps m@ is a map of capabilities @caps@ over a base monad
 -- @m@. Consider the following capabilities:
@@ -227,7 +225,7 @@ fromAnyCap (AnyCap a) = unsafeCoerce a
 -- capability has access to all other capabilities and itself.
 --
 newtype Capabilities (caps :: [CapK]) (m :: MonadK) =
-  Capabilities (M.Map TypeRep (AnyCap (CapsT caps m)))
+  Capabilities (M.Map TypeRep (CapElem m Any))
 
 instance Show (Capabilities caps m) where
   showsPrec n (Capabilities m) = showsPrec n (M.keys m)
@@ -243,8 +241,62 @@ type CapsT caps m = ReaderT (Capabilities caps m) m
 --
 -- This rules out using 'addCap', 'insertCap', and 'initCaps' inside capability
 -- implementations in an unsafe manner.
-newtype CapImpl cap icaps m =
-  CapImpl { getCapImpl :: forall caps. HasCaps icaps caps => cap (CapsT caps m) }
+data CapImpl cap icaps m where
+  CapImpl ::
+    WithSpine icaps =>
+    { getCapImpl :: forall caps. HasCaps icaps caps => cap (CapsT caps m)
+    } ->
+    CapImpl cap icaps m
+
+newtype CapElem m cap =
+  CapElem { getCapElem :: forall caps. cap (CapsT caps m) }
+
+-- Continuation-passing encoding of a list spine:
+--
+-- data Spine xs where
+--   Cons :: Spine xs -> Spine (x : xs)
+--   Nil :: Spine '[]
+--
+class WithSpine xs where
+  onSpine ::
+    forall r.
+    Proxy xs ->
+    ((xs ~ '[]) => r) ->
+    (forall y ys.
+      (xs ~ (y : ys)) =>
+      WithSpine ys =>
+      Proxy y ->
+      Proxy ys ->
+      r) ->
+    r
+
+instance WithSpine '[] where
+  onSpine _ onNil _ = onNil
+
+instance WithSpine xs => WithSpine (x : xs) where
+  onSpine _ _ onCons = onCons Proxy Proxy
+
+toCapElem ::
+  forall cap icaps m.
+  CapImpl cap icaps m ->
+  CapElem m cap
+toCapElem (CapImpl cap) = CapElem
+  (fiatHasElems (Proxy @icaps) (Proxy @caps) cap :: forall caps. cap (CapsT caps m))
+
+fiatHasElems ::
+  forall icaps caps.
+  WithSpine icaps =>
+  Proxy icaps ->
+  Proxy caps ->
+  forall r. (HasCaps icaps caps => r) -> r
+fiatHasElems Proxy Proxy r =
+  onSpine (Proxy @icaps)
+    -- nil
+    r
+    -- cons
+    (\(Proxy :: Proxy cap) (Proxy :: Proxy icaps') ->
+       case unsafeUnitConstr @(HasCap cap caps) of
+         Refl -> fiatHasElems (Proxy @icaps') (Proxy @caps) r)
 
 {-
 
@@ -319,13 +371,13 @@ initCaps = Capabilities . M.fromList . go
   where
     go ::
       CapabilitiesBuilder caps caps' m ->
-      [(TypeRep, AnyCap (CapsT caps m))]
+      [(TypeRep, CapElem m Any)]
     go NoCaps = []
-    go (AddCap (CapImpl cap :: CapImpl cap _ _) otherCaps) =
+    go (AddCap (capImpl :: CapImpl cap _ _) otherCaps) =
       let
         key = typeRep (Proxy :: Proxy cap)
       in
-        (key, toAnyCap cap) : go otherCaps
+        (key, toAnyCap (toCapElem capImpl)) : go otherCaps
 
 -- | Ensure that the @caps@ list has an element @cap@.
 type family HasCap cap caps :: Constraint where
@@ -356,7 +408,7 @@ type family HasNoCap cap caps :: Constraint where
 -- | Lookup a capability in a 'Capabilities' map. The 'HasCap' constraint
 -- guarantees that the lookup does not fail.
 getCap :: forall cap m caps. (Typeable cap, HasCap cap caps) => Capabilities caps m -> cap (CapsT caps m)
-getCap (Capabilities m) = fromAnyCap (m M.! typeRep (Proxy :: Proxy cap))
+getCap (Capabilities m) = (getCapElem . fromAnyCap) (m M.! typeRep (Proxy :: Proxy cap))
 
 -- An internal function that adds capabilities.
 unsafeInsertCap ::
@@ -364,11 +416,11 @@ unsafeInsertCap ::
   CapImpl cap icaps m ->
   Capabilities caps m ->
   Capabilities caps' m
-unsafeInsertCap (CapImpl cap :: CapImpl cap _ _) (unsafeCastCapabilities -> Capabilities caps) =
+unsafeInsertCap (capImpl :: CapImpl cap _ _) (unsafeCastCapabilities -> Capabilities caps) =
   let
     key = typeRep (Proxy :: Proxy cap)
   in
-    Capabilities (M.insert key (toAnyCap cap) caps)
+    Capabilities (M.insert key (toAnyCap (toCapElem capImpl)) caps)
 
 -- | Extend the set of capabilities. In case the capability is already present,
 -- it will be overriden (as with 'overrideCap'), but occur twice in the type.
@@ -403,15 +455,16 @@ overrideCap = unsafeInsertCap
 adjustCap ::
   forall cap caps m.
   (Typeable cap, HasCap cap caps) =>
-  (cap (CapsT caps m) -> cap (CapsT caps m)) ->
+  (forall caps'. cap (CapsT caps' m) -> cap (CapsT caps' m)) ->
   Capabilities caps m ->
   Capabilities caps m
 adjustCap f (Capabilities caps) =
   let
     key = typeRep (Proxy :: Proxy cap)
+    f' :: CapElem m cap -> CapElem m cap
+    f' (CapElem cap) = CapElem (f cap)
   in
-    Capabilities (M.adjust (toAnyCap . f . fromAnyCap) key caps)
-
+    Capabilities (M.adjust (toAnyCap . f' . fromAnyCap) key caps)
 
 -- | Extract a capability from 'CapsT' and provide it to a continuation.
 withCap :: (Typeable cap, HasCap cap caps) => (cap (CapsT caps m) -> CapsT caps m a) -> CapsT caps m a
@@ -434,11 +487,12 @@ checkCap (Capabilities m) =
     hasCap = M.member key m
   in
     if hasCap
-    then case fiatUnitConstr @(HasCap cap caps) of Refl -> HasCap
-    else case fiatUnitConstr @(HasNoCap cap caps) of Refl -> HasNoCap
-  where
-    fiatUnitConstr :: c :~: (() :: Constraint)
-    fiatUnitConstr = unsafeCoerce Refl
+    then case unsafeUnitConstr @(HasCap cap caps) of Refl -> HasCap
+    else case unsafeUnitConstr @(HasNoCap cap caps) of Refl -> HasNoCap
+
+-- Use to construct 'HasCap' or 'HasNoCap'.
+unsafeUnitConstr :: c :~: (() :: Constraint)
+unsafeUnitConstr = unsafeCoerce Refl
 
 -- | The 'Context' capability is used to model the @Reader@ effect within the
 -- capabilities framework.
@@ -459,8 +513,11 @@ askContext = withCap (\(Context x) -> pure x)
 -- | Execute a computation with a modified context value. Moral equivalent of 'local'.
 localContext :: forall x caps m a. (HasContext x caps) => (x -> x) -> CapsT caps m a -> CapsT caps m a
 localContext f =
-  let f' (Context x) = Context (f x)
-  in local (adjustCap f')
+  let
+    f' :: forall m'. Context x m' -> Context x m'
+    f' (Context x) = Context (f x)
+  in
+    local (adjustCap f')
 
 makeCap :: TH.Name -> TH.DecsQ
 makeCap capName = do
