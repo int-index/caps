@@ -300,7 +300,7 @@ fiatHasElems Proxy Proxy r =
 
 {-
 
-'unsafeCastCapabilities' can be used to reorder capabilities, remove non-unique
+Since 'caps' is phantom, we can reorder capabilities, remove non-unique
 capabilities, or extend them.
 
 The tricky case is extension. Assume @caps'@ subsumes @caps@, and consider each
@@ -337,8 +337,6 @@ capabilities actually contain @caps'@.
 We guarantee this property by the 'CapImpl' newtype.
 
 -}
-unsafeCastCapabilities :: Capabilities caps m -> Capabilities caps' m
-unsafeCastCapabilities = unsafeCoerce
 
 -- | 'CapabilitiesBuilder' is a helper type that serves as input to 'initCaps'.
 -- It is similar to a list, where 'AddCap' is cons and 'NoCaps' is nil, but does
@@ -416,7 +414,7 @@ unsafeInsertCap ::
   CapImpl cap icaps m ->
   Capabilities caps m ->
   Capabilities caps' m
-unsafeInsertCap (capImpl :: CapImpl cap _ _) (unsafeCastCapabilities -> Capabilities caps) =
+unsafeInsertCap (capImpl :: CapImpl cap _ _) (Capabilities caps) =
   let
     key = typeRep (Proxy :: Proxy cap)
   in
