@@ -45,11 +45,11 @@ Then we want to use this capability in the 'ReaderT' monad that provides the
 'Capabilities' map, and for this we define a helper per method:
 
 @
-logError :: (HasCap Logging caps, ToCapabilities r caps m) => String -> ReaderT r m ()
-logError message = withCap $ \\cap -> _logError cap message
+logError :: (HasCap Logging caps, HasCapabilities r caps m) => String -> ReaderT r m ()
+logError message = ReaderT $ \\caps -> _logError (toCap caps) message
 
-logDebug :: (HasCap Logging caps, ToCapabilities r caps m) => String -> ReaderT r m ()
-logDebug message = withCap $ \\cap -> _logDebug cap message
+logDebug :: (HasCap Logging caps, HasCapabilities r caps m) => String -> ReaderT r m ()
+logDebug message = ReaderT $ \\caps -> _logDebug (toCap caps) message
 @
 
 We can define other capabilities in a similar manner:
@@ -137,7 +137,8 @@ module Monad.Capabilities
   (
     -- * Capabilities
     Capabilities(),
-    ToCapabilities(..),
+    HasCapabilities(..),
+    toCap,
     emptyCaps,
     buildCaps,
     CapabilitiesBuilder(..),
@@ -146,7 +147,6 @@ module Monad.Capabilities
     overrideCap,
     addCap,
     insertCap,
-    withCap,
     checkCap,
     adjustCap,
 
@@ -228,12 +228,19 @@ emptyCaps = Capabilities DMap.empty
 instance Show (Capabilities caps m) where
   showsPrec n (Capabilities m) = showsPrec n (DMap.keys m)
 
-class ToCapabilities r caps m | r -> caps where
+class HasCapabilities r caps m | r -> caps where
   toCapabilities :: r -> Capabilities caps m
+
+toCap ::
+  (Typeable cap, HasCap cap caps) =>
+  HasCapabilities r caps m =>
+  (r -> cap m)
+toCap caps =
+  getCap (toCapabilities caps)
 
 instance
   (caps' ~ caps, m ~ m') =>
-    ToCapabilities (Capabilities caps' m') caps m
+    HasCapabilities (Capabilities caps' m') caps m
   where
     toCapabilities = id
 
@@ -247,25 +254,24 @@ data CapImpl cap icaps m where
   CapImpl ::
     WithSpine icaps =>
     { getCapImpl ::
-        forall caps r.
-        (HasCaps icaps caps, ToCapabilities r caps m) =>
-        cap (ReaderT r m)
+        forall caps.
+        HasCaps icaps caps =>
+        Capabilities caps m ->
+        cap m
     } ->
     CapImpl cap icaps m
 
 newtype CapElem m cap =
   CapElem
     { getCapElem ::
-        forall caps r.
-        ToCapabilities r caps m =>
-        cap (ReaderT r m)
+        forall caps.
+        Capabilities caps m -> cap m
     }
 
 overCapElem ::
-  (forall caps r.
-    ToCapabilities r caps m =>
-    cap (ReaderT r m) ->
-    cap' (ReaderT r m)) ->
+  (forall caps.
+    (Capabilities caps m -> cap m) ->
+    (Capabilities caps m -> cap' m)) ->
   CapElem m cap ->
   CapElem m cap'
 overCapElem f (CapElem cap) = CapElem (f cap)
@@ -301,7 +307,7 @@ toCapElem ::
   CapElem m cap
 toCapElem (CapImpl cap) = CapElem
   (fiatHasElems (Proxy @icaps) (Proxy @caps) cap ::
-    forall caps r. ToCapabilities r caps m => cap (ReaderT r m))
+    forall caps. Capabilities caps m -> cap m)
 
 fiatHasElems ::
   forall icaps caps.
@@ -423,11 +429,11 @@ type family HasNoCap cap caps :: Constraint where
 -- | Lookup a capability in a 'Capabilities' map. The 'HasCap' constraint
 -- guarantees that the lookup does not fail.
 getCap ::
-  forall cap m caps r.
-  (Typeable cap, HasCap cap caps, ToCapabilities r caps m) =>
+  forall cap m caps.
+  (Typeable cap, HasCap cap caps) =>
   Capabilities caps m ->
-  cap (ReaderT r m)
-getCap (Capabilities m) = getCapElem (m DMap.! typeRep)
+  cap m
+getCap caps@(Capabilities m) = getCapElem (m DMap.! typeRep) caps
 
 -- An internal function that adds capabilities.
 unsafeInsertCap ::
@@ -471,21 +477,13 @@ overrideCap = unsafeInsertCap
 adjustCap ::
   forall cap caps m.
   (Typeable cap, HasCap cap caps) =>
-  (forall caps' r. ToCapabilities r caps' m => cap (ReaderT r m) -> cap (ReaderT r m)) ->
+  (forall caps'.
+    (Capabilities caps' m -> cap m) ->
+    (Capabilities caps' m -> cap m)) ->
   Capabilities caps m ->
   Capabilities caps m
 adjustCap f (Capabilities caps) =
   Capabilities (DMap.adjust (overCapElem f) typeRep caps)
-
--- | Extract a capability in a 'ReaderT' of capabilities and provide it to a
--- continuation.
-withCap ::
-  (Typeable cap, HasCap cap caps, ToCapabilities r caps m) =>
-  (cap (ReaderT r m) -> ReaderT r m a) ->
-  ReaderT r m a
-withCap cont =
-  ReaderT $ \r ->
-    runReaderT (cont (getCap (toCapabilities r))) r
 
 -- | Evidence that @cap@
 data HasCapDecision cap caps where
@@ -517,27 +515,25 @@ instance (Typeable x, HasCap (Context x) caps) => HasContext x caps
 
 -- | Initialize a 'Context' capability.
 newContext :: forall x m. x -> CapImpl (Context x) '[] m
-newContext x = CapImpl (Context x)
+newContext x = CapImpl (\_ -> Context x)
 
--- | Retrieve the context value. Moral equivalent of 'ask'.
-askContext ::
-  (HasContext x caps, Applicative m, ToCapabilities r caps m) =>
-  ReaderT r m x
-askContext = withCap (\(Context x) -> pure x)
+class Monad m => MonadContext x m where
 
--- | Execute a computation with a modified context value. Moral equivalent of 'local'.
-localContext ::
-  forall x caps m a.
-  (HasContext x caps) =>
-  (x -> x) ->
-  ReaderT (Capabilities caps m) m a ->
-  ReaderT (Capabilities caps m) m a
-localContext f =
-  let
-    f' :: forall m'. Context x m' -> Context x m'
-    f' (Context x) = Context (f x)
-  in
-    local (adjustCap f')
+  -- | Retrieve the context value. Moral equivalent of 'ask'.
+  askContext :: m x
+
+  -- | Execute a computation with a modified context value. Moral equivalent of 'local'.
+  localContext :: (x -> x) -> m a -> m a
+
+instance (Monad m, HasContext x caps, r ~ Capabilities caps m) => MonadContext x (ReaderT r m) where
+  askContext = ReaderT (toM . toCap)
+    where
+      toM :: Context x m -> m x
+      toM (Context x) = pure x
+  localContext f = local (adjustCap (f'.))
+    where
+      f' :: Context x m -> Context x m
+      f' (Context x) = Context (f x)
 
 makeCap :: TH.Name -> TH.DecsQ
 makeCap capName = do
@@ -566,7 +562,7 @@ makeCap capName = do
         return $ toArgList ty
     return (methodName, fieldName, ty, tyArgList)
   let className = TH.mkName ("Monad" ++ TH.nameBase capName)
-  class_decs <- (:[]) <$>
+  (:[]) <$>
     TH.classD
       (TH.cxt [])
       className
@@ -575,34 +571,6 @@ makeCap capName = do
       [ TH.sigD methodName (return ty)
       | (methodName, _, ty, _) <- methodSpecs
       ]
-  let
-    methodDec methodName fieldName tyArgList = do
-      TH.funD methodName
-        [do
-          argNames <- do
-            for (zip [0..] tyArgList) $ \(i, _tyArg) ->
-              TH.newName ("arg" ++ show (i::Int))
-          let
-            pats = map TH.varP argNames
-            args = map TH.varE argNames
-            body = TH.normalB $ do
-              lamName <- TH.newName "cap"
-              TH.appE [e|withCap|] $
-                TH.lam1E (TH.varP lamName) $
-                  foldl1' TH.appE (TH.varE fieldName : TH.varE lamName : args)
-          TH.clause pats body []
-        ]
-  instance_decs <- (:[]) <$> do
-    rVar <- TH.newName "r"
-    capsVar <- TH.newName "caps"
-    TH.instanceD
-      (TH.cxt [ [t|HasCap $capType $(TH.varT capsVar)|],
-                [t| ToCapabilities $(TH.varT rVar) $(TH.varT capsVar) $(tyVarBndrT' mVar) |] ])
-      [t| $(TH.conT className) (ReaderT $(TH.varT rVar) $(tyVarBndrT' mVar)) |]
-      [ methodDec methodName fieldName tyArgList
-      | (methodName, fieldName, _, tyArgList) <- methodSpecs
-      ]
-  return (class_decs ++ instance_decs)
   where
     tyVarBndrT (TH.PlainTV name) = TH.varT name
     tyVarBndrT (TH.KindedTV name k) = TH.sigT (TH.varT name) k
