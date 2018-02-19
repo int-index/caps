@@ -11,9 +11,9 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Monad.Capabilities
-  build-depends:       base >=4.9 && <4.11,
+  build-depends:       base >=4.10 && <4.11,
                        transformers,
-                       containers,
+                       dependent-map,
                        template-haskell
   hs-source-dirs:      src
   default-language:    Haskell2010
@@ -22,7 +22,7 @@ library
                        -fno-warn-partial-type-signatures
 
 test-suite test-examples
-  build-depends:       base >=4.9 && <4.11,
+  build-depends:       base >=4.10 && <4.11,
                        caps,
                        mtl,
                        tasty,

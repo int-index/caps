@@ -168,29 +168,24 @@ module Monad.Capabilities
 
   ) where
 
+import Control.Monad.Trans.Reader
 import Data.Kind (Type, Constraint)
-import Data.Typeable (Typeable, TypeRep, typeRep)
-import GHC.Exts (Any)
-import GHC.TypeLits (TypeError, ErrorMessage(..))
 import Data.Traversable
 import Data.Proxy
 import Data.Type.Equality
 import Data.List (foldl1')
-import Control.Monad.Trans.Reader
+import GHC.TypeLits (TypeError, ErrorMessage(..))
+import Type.Reflection (Typeable, TypeRep, typeRep)
 import Unsafe.Coerce (unsafeCoerce)
 
-import qualified Data.Map.Lazy as M
+import qualified Data.Dependent.Map as DMap
+import Data.Dependent.Map (DMap, DSum(..))
+
 import qualified Language.Haskell.TH as TH
 
 type MonadK = Type -> Type
 
 type CapK = MonadK -> Type
-
-toAnyCap :: CapElem m cap -> CapElem m Any
-toAnyCap = unsafeCoerce
-
-fromAnyCap :: CapElem m Any -> CapElem m cap
-fromAnyCap = unsafeCoerce
 
 -- | @'Capabilities' caps m@ is a map of capabilities @caps@ over a base monad
 -- @m@. Consider the following capabilities:
@@ -225,10 +220,10 @@ fromAnyCap = unsafeCoerce
 -- capability has access to all other capabilities and itself.
 --
 newtype Capabilities (caps :: [CapK]) (m :: MonadK) =
-  Capabilities (M.Map TypeRep (CapElem m Any))
+  Capabilities (DMap TypeRep (CapElem m))
 
 instance Show (Capabilities caps m) where
-  showsPrec n (Capabilities m) = showsPrec n (M.keys m)
+  showsPrec n (Capabilities m) = showsPrec n (DMap.keys m)
 
 -- | The 'CapsT' transformer adds access to capabilities. This is a convenience
 -- synonym for 'ReaderT' of 'Capabilities', and all 'ReaderT' functions
@@ -250,6 +245,12 @@ data CapImpl cap icaps m where
 
 newtype CapElem m cap =
   CapElem { getCapElem :: forall caps. cap (CapsT caps m) }
+
+overCapElem ::
+  (forall caps. cap (CapsT caps m) -> cap' (CapsT caps m')) ->
+  CapElem m cap ->
+  CapElem m' cap'
+overCapElem f (CapElem cap) = CapElem (f cap)
 
 -- Continuation-passing encoding of a list spine:
 --
@@ -365,17 +366,14 @@ data CapabilitiesBuilder (allCaps :: [CapK]) (caps :: [CapK]) (m :: MonadK) wher
 --     NoCaps
 -- @
 initCaps :: forall caps m. CapabilitiesBuilder caps caps m -> Capabilities caps m
-initCaps = Capabilities . M.fromList . go
+initCaps = Capabilities . DMap.fromList . go
   where
     go ::
       CapabilitiesBuilder caps caps' m ->
-      [(TypeRep, CapElem m Any)]
+      [DSum TypeRep (CapElem m)]
     go NoCaps = []
-    go (AddCap (capImpl :: CapImpl cap _ _) otherCaps) =
-      let
-        key = typeRep (Proxy :: Proxy cap)
-      in
-        (key, toAnyCap (toCapElem capImpl)) : go otherCaps
+    go (AddCap capImpl otherCaps) =
+      (typeRep :=> toCapElem capImpl) : go otherCaps
 
 -- | Ensure that the @caps@ list has an element @cap@.
 type family HasCap cap caps :: Constraint where
@@ -406,7 +404,7 @@ type family HasNoCap cap caps :: Constraint where
 -- | Lookup a capability in a 'Capabilities' map. The 'HasCap' constraint
 -- guarantees that the lookup does not fail.
 getCap :: forall cap m caps. (Typeable cap, HasCap cap caps) => Capabilities caps m -> cap (CapsT caps m)
-getCap (Capabilities m) = (getCapElem . fromAnyCap) (m M.! typeRep (Proxy :: Proxy cap))
+getCap (Capabilities m) = getCapElem (m DMap.! typeRep)
 
 -- An internal function that adds capabilities.
 unsafeInsertCap ::
@@ -414,11 +412,8 @@ unsafeInsertCap ::
   CapImpl cap icaps m ->
   Capabilities caps m ->
   Capabilities caps' m
-unsafeInsertCap (capImpl :: CapImpl cap _ _) (Capabilities caps) =
-  let
-    key = typeRep (Proxy :: Proxy cap)
-  in
-    Capabilities (M.insert key (toAnyCap (toCapElem capImpl)) caps)
+unsafeInsertCap capImpl (Capabilities caps) =
+  Capabilities (DMap.insert typeRep (toCapElem capImpl) caps)
 
 -- | Extend the set of capabilities. In case the capability is already present,
 -- it will be overriden (as with 'overrideCap'), but occur twice in the type.
@@ -457,12 +452,7 @@ adjustCap ::
   Capabilities caps m ->
   Capabilities caps m
 adjustCap f (Capabilities caps) =
-  let
-    key = typeRep (Proxy :: Proxy cap)
-    f' :: CapElem m cap -> CapElem m cap
-    f' (CapElem cap) = CapElem (f cap)
-  in
-    Capabilities (M.adjust (toAnyCap . f' . fromAnyCap) key caps)
+  Capabilities (DMap.adjust (overCapElem f) typeRep caps)
 
 -- | Extract a capability from 'CapsT' and provide it to a continuation.
 withCap :: (Typeable cap, HasCap cap caps) => (cap (CapsT caps m) -> CapsT caps m a) -> CapsT caps m a
@@ -480,13 +470,9 @@ instance Show (HasCapDecision cap caps) where
 -- | Determine at runtime whether 'HasCap cap caps' or 'HasNoCap cap caps' holds.
 checkCap :: forall cap caps m. Typeable cap => Capabilities caps m -> HasCapDecision cap caps
 checkCap (Capabilities m) =
-  let
-    key = typeRep (Proxy :: Proxy cap)
-    hasCap = M.member key m
-  in
-    if hasCap
-    then case unsafeUnitConstr @(HasCap cap caps) of Refl -> HasCap
-    else case unsafeUnitConstr @(HasNoCap cap caps) of Refl -> HasNoCap
+  if DMap.member (typeRep @cap) m
+  then case unsafeUnitConstr @(HasCap cap caps) of Refl -> HasCap
+  else case unsafeUnitConstr @(HasNoCap cap caps) of Refl -> HasNoCap
 
 -- Use to construct 'HasCap' or 'HasNoCap'.
 unsafeUnitConstr :: c :~: (() :: Constraint)
