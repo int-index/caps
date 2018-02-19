@@ -41,15 +41,14 @@ The dictionary is wrapped in 'CapImpl' to guarantee that it is sufficiently
 polymorphic (this is required to support simultaneous use of monadic actions in
 negative position and capability extension).
 
-Then we want to use this capability in the 'CapsT' monad (which is nothing more
-but a synonym for 'ReaderT' of 'Capabilities'), and for this we define a helper
-per method:
+Then we want to use this capability in the 'ReaderT' monad that provides the
+'Capabilities' map, and for this we define a helper per method:
 
 @
-logError :: HasCap Logging caps => String -> CapsT caps m ()
+logError :: (HasCap Logging caps, ToCapabilities r caps m) => String -> ReaderT r m ()
 logError message = withCap $ \\cap -> _logError cap message
 
-logDebug :: HasCap Logging caps => String -> CapsT caps m ()
+logDebug :: (HasCap Logging caps, ToCapabilities r caps m) => String -> ReaderT r m ()
 logDebug message = withCap $ \\cap -> _logDebug cap message
 @
 
@@ -138,7 +137,6 @@ module Monad.Capabilities
   (
     -- * Capabilities
     Capabilities(),
-    CapsT,
     ToCapabilities(..),
     emptyCaps,
     buildCaps,
@@ -211,14 +209,14 @@ type CapK = MonadK -> Type
 --
 -- @
 --
---  X:   X (\\_ -> return "hi") :: X (CapsT '[X, Y] IO)
---  Y:   Y (\\_ -> return True) :: Y (CapsT '[X, Y] IO)
+--  X:   X (\\_ -> return "hi") :: X (ReaderT (Capabilities '[X, Y] IO) IO)
+--  Y:   Y (\\_ -> return True) :: Y (ReaderT (Capabilities '[X, Y] IO) IO)
 -- ----  ---------------------    --------------------
 -- keys         values              types of values
 -- @
 --
 -- Notice that stored dictionaries are parametrized not just by the base monad
--- @IO@, but with the 'CapsT' transformer on top. This means that each
+-- @IO@, but with a 'ReaderT' of 'Capabilities' on top. This means that each
 -- capability has access to all other capabilities and itself.
 --
 newtype Capabilities (caps :: [CapK]) (m :: MonadK) =
@@ -238,11 +236,6 @@ instance
     ToCapabilities (Capabilities caps' m') caps m
   where
     toCapabilities = id
-
--- | The 'CapsT' transformer adds access to capabilities. This is a convenience
--- synonym for 'ReaderT' of 'Capabilities', and all 'ReaderT' functions
--- ('runReaderT', 'withReaderT') can be used with it.
-type CapsT caps m = ReaderT (Capabilities caps m) m
 
 -- | The 'CapImpl' newtype guarantees that the wrapped capability implementation
 -- is sufficiently polymorphic so that required subtyping properties hold in
@@ -331,7 +324,7 @@ Since 'caps' is phantom, we can reorder capabilities, remove non-unique
 capabilities, or extend them.
 
 The tricky case is extension. Assume @caps'@ subsumes @caps@, and consider each
-@cap n@ where @n ~ CapsT caps m@ individually. When we cast this to use @caps'@,
+@cap n@ where @n ~ ReaderT (Capabilities caps m) m@ individually. When we cast this to use @caps'@,
 we must know that @cap@ will continue to work correctly.
 
 1. Assume @cap@ uses @n@ in positive position exclusively. This means that the
@@ -484,7 +477,8 @@ adjustCap ::
 adjustCap f (Capabilities caps) =
   Capabilities (DMap.adjust (overCapElem f) typeRep caps)
 
--- | Extract a capability from 'CapsT' and provide it to a continuation.
+-- | Extract a capability in a 'ReaderT' of capabilities and provide it to a
+-- continuation.
 withCap ::
   (Typeable cap, HasCap cap caps, ToCapabilities r caps m) =>
   (cap (ReaderT r m) -> ReaderT r m a) ->
