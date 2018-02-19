@@ -353,7 +353,7 @@ data CapabilitiesBuilder (allCaps :: [CapK]) (caps :: [CapK]) (m :: MonadK) wher
     (Typeable cap, HasCaps icaps allCaps, HasNoCap cap caps) =>
     CapImpl cap icaps m ->
     CapabilitiesBuilder allCaps caps m ->
-    CapabilitiesBuilder allCaps (cap ': caps) m
+    CapabilitiesBuilder allCaps (cap : caps) m
   NoCaps :: CapabilitiesBuilder allCaps '[] m
 
 -- | Build a map of capabilities from individual implementations:
@@ -377,8 +377,8 @@ initCaps = Capabilities . DMap.fromList . go
 
 -- | Ensure that the @caps@ list has an element @cap@.
 type family HasCap cap caps :: Constraint where
-  HasCap cap (cap  ': _) = ()
-  HasCap cap (cap' ': caps) = HasCap cap caps
+  HasCap cap (cap  : _) = ()
+  HasCap cap (cap' : caps) = HasCap cap caps
   HasCap cap '[] =
     TypeError
       (Text "Capability " :<>:
@@ -389,16 +389,16 @@ type family HasCap cap caps :: Constraint where
 -- to a @HasCap icap caps@ constraint for each @icap@ in @icaps@.
 type family HasCaps icaps caps :: Constraint where
   HasCaps '[] _ = ()
-  HasCaps (icap ': icaps) caps = (HasCap icap caps, HasCaps icaps caps)
+  HasCaps (icap : icaps) caps = (HasCap icap caps, HasCaps icaps caps)
 
 -- | Ensure that the @caps@ list does not have an element @cap@.
 type family HasNoCap cap caps :: Constraint where
-  HasNoCap cap (cap  ': _) =
+  HasNoCap cap (cap : _) =
     TypeError
       (Text "Capability " :<>:
        ShowType cap :<>:
        Text " is already present")
-  HasNoCap cap (cap' ': caps) = HasNoCap cap caps
+  HasNoCap cap (cap' : caps) = HasNoCap cap caps
   HasNoCap cap '[] = ()
 
 -- | Lookup a capability in a 'Capabilities' map. The 'HasCap' constraint
@@ -418,19 +418,19 @@ unsafeInsertCap capImpl (Capabilities caps) =
 -- | Extend the set of capabilities. In case the capability is already present,
 -- it will be overriden (as with 'overrideCap'), but occur twice in the type.
 insertCap ::
-  (Typeable cap, HasCaps icaps (cap ': caps)) =>
+  (Typeable cap, HasCaps icaps (cap : caps)) =>
   CapImpl cap icaps m ->
   Capabilities caps m ->
-  Capabilities (cap ': caps) m
+  Capabilities (cap : caps) m
 insertCap = unsafeInsertCap
 
 -- | Extend the set of capabilities. In case the capability is already present,
 -- a type error occurs.
 addCap ::
-  (Typeable cap, HasNoCap cap caps, HasCaps icaps (cap ': caps)) =>
+  (Typeable cap, HasNoCap cap caps, HasCaps icaps (cap : caps)) =>
   CapImpl cap icaps m ->
   Capabilities caps m ->
-  Capabilities (cap ': caps) m
+  Capabilities (cap : caps) m
 addCap = insertCap
 
 -- | Override the implementation of an existing capability.
