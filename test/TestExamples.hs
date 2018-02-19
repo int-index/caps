@@ -53,13 +53,13 @@ dbDummy = CapImpl $ DB
 testLoggingOverride :: TestTree
 testLoggingOverride = testCase "logging override" $ do
   let
-    caps = initCaps $
+    caps = buildCaps $
       AddCap loggingIO $ -- try commenting out this line,
                          -- you get a nice error message
       -- AddCap loggingDummy $ -- try uncommenting this line,
                                -- you get a nice error message
       AddCap dbDummy $
-      NoCaps
+      BaseCaps emptyCaps
   flip runReaderT caps $ do
     v <- dbGet "k" -- will have log output
     withReaderT (overrideCap loggingDummy) $ do
@@ -70,9 +70,9 @@ testLoggingOverride = testCase "logging override" $ do
 testAddingDb :: TestTree
 testAddingDb = testCase "adding db" $ do
   let
-    caps = initCaps $
+    caps = buildCaps $
       AddCap loggingIO $
-      NoCaps
+      BaseCaps emptyCaps
   flip runReaderT caps $ do
     -- can't have DB access here
     withReaderT (insertCap dbDummy) $ do

@@ -95,17 +95,17 @@ together in a 'Capabilities' map and run the application with this map in a
 'ReaderT' context:
 
 @
-caps = initCaps $
+caps = buildCaps $
   AddCap loggingIO $
   AddCap fileStorageIO $
-  NoCaps
+  BaseCaps emptyCaps
 
 flip runReaderT caps $ do
   config <- readFile "config.yaml"
   ...
 @
 
-Capabilities passed to 'initCaps' can depend on each other. The order does not
+Capabilities passed to 'buildCaps' can depend on each other. The order does not
 matter (although it is reflected in the types), and duplicate capabilities are
 disallowed.
 
@@ -139,7 +139,8 @@ module Monad.Capabilities
     -- * Capabilities
     Capabilities(),
     CapsT,
-    initCaps,
+    emptyCaps,
+    buildCaps,
     CapabilitiesBuilder(..),
     CapImpl(..),
     getCap,
@@ -179,7 +180,7 @@ import Type.Reflection (Typeable, TypeRep, typeRep)
 import Unsafe.Coerce (unsafeCoerce)
 
 import qualified Data.Dependent.Map as DMap
-import Data.Dependent.Map (DMap, DSum(..))
+import Data.Dependent.Map (DMap)
 
 import qualified Language.Haskell.TH as TH
 
@@ -222,6 +223,9 @@ type CapK = MonadK -> Type
 newtype Capabilities (caps :: [CapK]) (m :: MonadK) =
   Capabilities (DMap TypeRep (CapElem m))
 
+emptyCaps :: Capabilities '[] m
+emptyCaps = Capabilities DMap.empty
+
 instance Show (Capabilities caps m) where
   showsPrec n (Capabilities m) = showsPrec n (DMap.keys m)
 
@@ -234,7 +238,7 @@ type CapsT caps m = ReaderT (Capabilities caps m) m
 -- is sufficiently polymorphic so that required subtyping properties hold in
 -- methods that take monadic actions as input (negative position).
 --
--- This rules out using 'addCap', 'insertCap', and 'initCaps' inside capability
+-- This rules out using 'addCap', 'insertCap', and 'buildCaps' inside capability
 -- implementations in an unsafe manner.
 data CapImpl cap icaps m where
   CapImpl ::
@@ -339,41 +343,41 @@ We guarantee this property by the 'CapImpl' newtype.
 
 -}
 
--- | 'CapabilitiesBuilder' is a helper type that serves as input to 'initCaps'.
--- It is similar to a list, where 'AddCap' is cons and 'NoCaps' is nil, but does
--- additional bookkeeping at type-level.
+-- | 'CapabilitiesBuilder' is a type to extend capabilities.
 --
 -- The @allCaps@ parameter is a list of capabilities that will be provided to
--- 'initCaps' eventually, when the building process is done. The @caps@
+-- 'buildCaps' eventually, when the building process is done. The @caps@
 -- parameter is the part of capabilities that was constructed so far. The
 -- builder is considered complete when @allCaps ~ caps@, only then it can be
--- passed to 'initCaps'.
+-- passed to 'buildCaps'.
 data CapabilitiesBuilder (allCaps :: [CapK]) (caps :: [CapK]) (m :: MonadK) where
   AddCap ::
     (Typeable cap, HasCaps icaps allCaps, HasNoCap cap caps) =>
     CapImpl cap icaps m ->
     CapabilitiesBuilder allCaps caps m ->
     CapabilitiesBuilder allCaps (cap : caps) m
-  NoCaps :: CapabilitiesBuilder allCaps '[] m
+  BaseCaps ::
+    Capabilities caps m ->
+    CapabilitiesBuilder allCaps caps m
 
 -- | Build a map of capabilities from individual implementations:
 --
 -- @
 -- capsXY :: Capabilities '[X, Y] IO
--- capsXY = initCaps $
+-- capsXY = buildCaps $
 --     AddCap xImpl $
 --     AddCap yImpl $
---     NoCaps
+--     BaseCaps emptyCaps
 -- @
-initCaps :: forall caps m. CapabilitiesBuilder caps caps m -> Capabilities caps m
-initCaps = Capabilities . DMap.fromList . go
+buildCaps :: forall caps m. CapabilitiesBuilder caps caps m -> Capabilities caps m
+buildCaps = Capabilities . go
   where
     go ::
       CapabilitiesBuilder caps caps' m ->
-      [DSum TypeRep (CapElem m)]
-    go NoCaps = []
+      DMap TypeRep (CapElem m)
+    go (BaseCaps (Capabilities caps)) = caps
     go (AddCap capImpl otherCaps) =
-      (typeRep :=> toCapElem capImpl) : go otherCaps
+      DMap.insert typeRep (toCapElem capImpl) (go otherCaps)
 
 -- | Ensure that the @caps@ list has an element @cap@.
 type family HasCap cap caps :: Constraint where
@@ -431,7 +435,7 @@ addCap ::
   CapImpl cap icaps m ->
   Capabilities caps m ->
   Capabilities (cap : caps) m
-addCap = insertCap
+addCap capImpl caps = buildCaps (AddCap capImpl $ BaseCaps caps)
 
 -- | Override the implementation of an existing capability.
 overrideCap ::
