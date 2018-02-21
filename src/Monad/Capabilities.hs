@@ -462,7 +462,7 @@ adjustCap f (Capabilities caps) =
 withCap :: (Typeable cap, HasCap cap caps) => (cap (CapsT caps m) -> CapsT caps m a) -> CapsT caps m a
 withCap cont = ReaderT $ \caps -> runReaderT (cont (getCap caps)) caps
 
--- | Evidence that @cap@
+-- | Evidence that @cap@ is present or absent in @caps@.
 data HasCapDecision cap caps where
   HasNoCap :: HasNoCap cap caps => HasCapDecision cap caps
   HasCap :: HasCap cap caps => HasCapDecision cap caps
