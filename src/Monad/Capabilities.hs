@@ -1,7 +1,8 @@
 {-# LANGUAGE TypeInType, GADTs, ScopedTypeVariables, FlexibleInstances,
              TypeOperators, ConstraintKinds, TypeFamilies, PartialTypeSignatures,
              UndecidableInstances, ViewPatterns, RankNTypes, TypeApplications,
-             MultiParamTypeClasses, UndecidableSuperClasses, TemplateHaskell #-}
+             MultiParamTypeClasses, UndecidableSuperClasses, TemplateHaskell,
+             StandaloneDeriving, DerivingStrategies, GeneralizedNewtypeDeriving #-}
 
 {-|
 
@@ -176,11 +177,11 @@ import Data.Proxy
 import Data.Type.Equality
 import Data.List (foldl1')
 import GHC.TypeLits (TypeError, ErrorMessage(..))
-import Type.Reflection (Typeable, TypeRep, typeRep)
+import Type.Reflection (Typeable, typeRep)
 import Unsafe.Coerce (unsafeCoerce)
 
-import qualified Data.Dependent.Map as DMap
-import Data.Dependent.Map (DMap)
+import qualified Data.TypeRepMap as TypeRepMap
+import Data.TypeRepMap (TypeRepMap)
 
 import qualified Language.Haskell.TH as TH
 
@@ -221,13 +222,12 @@ type CapK = MonadK -> Type
 -- capability has access to all other capabilities and itself.
 --
 newtype Capabilities (caps :: [CapK]) (m :: MonadK) =
-  Capabilities (DMap TypeRep (CapElem m))
+  Capabilities (TypeRepMap (CapElem m))
 
 emptyCaps :: Capabilities '[] m
-emptyCaps = Capabilities DMap.empty
+emptyCaps = Capabilities TypeRepMap.empty
 
-instance Show (Capabilities caps m) where
-  showsPrec n (Capabilities m) = showsPrec n (DMap.keys m)
+deriving newtype instance Show (Capabilities caps m)
 
 -- | The 'CapsT' transformer adds access to capabilities. This is a convenience
 -- synonym for 'ReaderT' of 'Capabilities', and all 'ReaderT' functions
@@ -374,10 +374,10 @@ buildCaps = Capabilities . go
   where
     go ::
       CapabilitiesBuilder caps caps' m ->
-      DMap TypeRep (CapElem m)
+      TypeRepMap (CapElem m)
     go (BaseCaps (Capabilities caps)) = caps
     go (AddCap capImpl otherCaps) =
-      DMap.insert typeRep (toCapElem capImpl) (go otherCaps)
+      TypeRepMap.insert (toCapElem capImpl) (go otherCaps)
 
 -- | Ensure that the @caps@ list has an element @cap@.
 type family HasCap cap caps :: Constraint where
@@ -408,7 +408,7 @@ type family HasNoCap cap caps :: Constraint where
 -- | Lookup a capability in a 'Capabilities' map. The 'HasCap' constraint
 -- guarantees that the lookup does not fail.
 getCap :: forall cap m caps. (Typeable cap, HasCap cap caps) => Capabilities caps m -> cap (CapsT caps m)
-getCap (Capabilities m) = getCapElem (m DMap.! typeRep)
+getCap (Capabilities m) = maybe (error "getCap: impossible") getCapElem (TypeRepMap.lookup m)
 
 -- An internal function that adds capabilities.
 unsafeInsertCap ::
@@ -417,7 +417,7 @@ unsafeInsertCap ::
   Capabilities caps m ->
   Capabilities caps' m
 unsafeInsertCap capImpl (Capabilities caps) =
-  Capabilities (DMap.insert typeRep (toCapElem capImpl) caps)
+  Capabilities (TypeRepMap.insert (toCapElem capImpl) caps)
 
 -- | Extend the set of capabilities. In case the capability is already present,
 -- it will be overriden (as with 'overrideCap'), but occur twice in the type.
@@ -456,7 +456,14 @@ adjustCap ::
   Capabilities caps m ->
   Capabilities caps m
 adjustCap f (Capabilities caps) =
-  Capabilities (DMap.adjust (overCapElem f) typeRep caps)
+  Capabilities (TypeRepMap.hoistWithKey adj caps)
+  where
+    -- TODO: use 'TypeRepMap.adjust' when it is implemented, see #48
+    adj :: forall x. Typeable x => CapElem m x -> CapElem m x
+    adj =
+      case testEquality (typeRep @cap) (typeRep @x) of
+        Just Refl -> overCapElem f
+        Nothing -> id
 
 -- | Extract a capability from 'CapsT' and provide it to a continuation.
 withCap :: (Typeable cap, HasCap cap caps) => (cap (CapsT caps m) -> CapsT caps m a) -> CapsT caps m a
@@ -474,7 +481,7 @@ instance Show (HasCapDecision cap caps) where
 -- | Determine at runtime whether 'HasCap cap caps' or 'HasNoCap cap caps' holds.
 checkCap :: forall cap caps m. Typeable cap => Capabilities caps m -> HasCapDecision cap caps
 checkCap (Capabilities m) =
-  if DMap.member (typeRep @cap) m
+  if TypeRepMap.member @cap m
   then case unsafeUnitConstr @(HasCap cap caps) of Refl -> HasCap
   else case unsafeUnitConstr @(HasNoCap cap caps) of Refl -> HasNoCap
 
