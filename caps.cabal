@@ -22,7 +22,7 @@ library
                        -fno-warn-partial-type-signatures
 
 test-suite test-examples
-  build-depends:       base >=4.10 && <4.11,
+  build-depends:       base >=4.10 && <4.12,
                        caps,
                        mtl,
                        tasty,
