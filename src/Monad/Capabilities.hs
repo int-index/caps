@@ -177,7 +177,7 @@ import Data.Proxy
 import Data.Type.Equality
 import Data.List (foldl1')
 import GHC.TypeLits (TypeError, ErrorMessage(..))
-import Type.Reflection (Typeable, typeRep)
+import Type.Reflection (Typeable)
 import Unsafe.Coerce (unsafeCoerce)
 
 import qualified Data.TypeRepMap as TypeRepMap
@@ -456,14 +456,7 @@ adjustCap ::
   Capabilities caps m ->
   Capabilities caps m
 adjustCap f (Capabilities caps) =
-  Capabilities (TypeRepMap.hoistWithKey adj caps)
-  where
-    -- TODO: use 'TypeRepMap.adjust' when it is implemented, see #48
-    adj :: forall x. Typeable x => CapElem m x -> CapElem m x
-    adj =
-      case testEquality (typeRep @cap) (typeRep @x) of
-        Just Refl -> overCapElem f
-        Nothing -> id
+  Capabilities (TypeRepMap.adjust (overCapElem f) caps)
 
 -- | Extract a capability from 'CapsT' and provide it to a continuation.
 withCap :: (Typeable cap, HasCap cap caps) => (cap (CapsT caps m) -> CapsT caps m a) -> CapsT caps m a
