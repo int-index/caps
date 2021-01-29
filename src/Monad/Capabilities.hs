@@ -178,6 +178,7 @@ import Data.Type.Equality
 import Data.List (foldl1')
 import GHC.TypeLits (TypeError, ErrorMessage(..))
 import Type.Reflection (Typeable)
+import Data.Coerce (coerce)
 import Unsafe.Coerce (unsafeCoerce)
 
 import qualified Data.TypeRepMap as TypeRepMap
@@ -500,12 +501,7 @@ askContext = withCap (\(Context x) -> pure x)
 
 -- | Execute a computation with a modified context value. Moral equivalent of 'local'.
 localContext :: forall x caps m a. (HasContext x caps) => (x -> x) -> CapsT caps m a -> CapsT caps m a
-localContext f =
-  let
-    f' :: forall m'. Context x m' -> Context x m'
-    f' (Context x) = Context (f x)
-  in
-    local (adjustCap f')
+localContext f = local (adjustCap @(Context x) (coerce f))
 
 makeCap :: TH.Name -> TH.DecsQ
 makeCap capName = do
