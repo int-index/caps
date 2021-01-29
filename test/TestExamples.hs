@@ -1,4 +1,6 @@
-{-# LANGUAGE DataKinds, TypeFamilies, RankNTypes, UndecidableInstances, TemplateHaskell, MultiParamTypeClasses, FlexibleInstances #-}
+{-# LANGUAGE DataKinds, TypeFamilies, RankNTypes, UndecidableInstances, TemplateHaskell, FlexibleInstances #-}
+-- Needed only for FooBar example
+{-# LANGUAGE MultiParamTypeClasses, ScopedTypeVariables, AllowAmbiguousTypes #-}
 
 {-# OPTIONS -ddump-splices #-}
 
@@ -85,11 +87,12 @@ testAddingDb = testCase "adding db" $ do
 
 -- We test that generated code compiles
 
-data Abc a b m = Abc
-  { _bla :: b -> a -> m String
+data Foobar a b m = Foobar
+  { _bar :: b -> a -> m String
+  , _foo :: m Int
   }
 
-makeCap ''Abc
+makeCap ''Foobar
 
 
 -------- Test tree and Main ----------

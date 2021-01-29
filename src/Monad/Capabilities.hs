@@ -543,8 +543,18 @@ makeCap capName = do
       [ TH.sigD methodName (return ty)
       | (methodName, _, ty, _) <- methodSpecs
       ]
+  rVar <- TH.newName "r"
+  readerT <- [t| (ReaderT $(TH.varT rVar) $(tyVarBndrT' mVar)) |]
+  extraTys' <- mapM tyVarBndrT' extraTyVars
   let
     methodDec methodName fieldName tyArgList = do
+      lamName <- TH.newName "cap"
+      let capLam =
+            if null extraTys'
+              then TH.VarP lamName
+              else TH.SigP (TH.VarP lamName) $
+                      foldl TH.AppT (TH.ConT capName)
+                        (extraTys' ++ [readerT])
       TH.funD methodName
         [do
           argNames <- do
@@ -554,18 +564,14 @@ makeCap capName = do
             pats = map TH.varP argNames
             args = map TH.varE argNames
             body = TH.normalB $ do
-              lamName <- TH.newName "cap"
               TH.appE [e|withCap|] $
-                TH.lam1E (TH.varP lamName) $
+                TH.lam1E (pure capLam) $
                   foldl1' TH.appE (TH.varE fieldName : TH.varE lamName : args)
           TH.clause pats body []
         ]
-  rVar <- TH.newName "r"
   capsVar <- TH.newName "caps"
   classConT <- TH.conT className
-  extraTys' <- mapM tyVarBndrT' extraTyVars
   let classConT' = foldl TH.AppT classConT extraTys'
-  readerT <- [t| (ReaderT $(TH.varT rVar) $(tyVarBndrT' mVar)) |]
   let tc = TH.AppT classConT' readerT
   let mkTypeableConstr tv = [t|Typeable $(pure tv)|]
   let typeables = map mkTypeableConstr extraTys'
