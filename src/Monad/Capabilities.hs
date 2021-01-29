@@ -509,6 +509,7 @@ localContext f =
 
 makeCap :: TH.Name -> TH.DecsQ
 makeCap capName = do
+  let className = TH.mkName ("Monad" ++ TH.nameBase capName)
   info <- TH.reify capName
   (vbts, tyVars) <-
     case info of
@@ -519,7 +520,10 @@ makeCap capName = do
     case reverse tyVars of
       (tv:tvs) -> return (tv, reverse tvs)
       _ -> fail "Capability must have a monadic parameter"
-  let capType = foldl1' TH.appT (TH.conT capName : map tyVarBndrT extraTyVars)
+  let
+    parametrize name = foldl1' TH.appT (TH.conT name : map tyVarBndrT extraTyVars)
+    capType = parametrize capName
+    classType = parametrize className
   methodSpecs <- for vbts $ \(fieldName, _, ty) -> do
     methodName <-
       case TH.nameBase fieldName of
@@ -533,12 +537,11 @@ makeCap capName = do
       in
         return $ toArgList ty
     return (methodName, fieldName, ty, tyArgList)
-  let className = TH.mkName ("Monad" ++ TH.nameBase capName)
   class_decs <- (:[]) <$>
     TH.classD
       (TH.cxt [])
       className
-      [mVar]
+      tyVars
       []
       [ TH.sigD methodName (return ty)
       | (methodName, _, ty, _) <- methodSpecs
@@ -555,7 +558,7 @@ makeCap capName = do
             args = map TH.varE argNames
             body = TH.normalB $ do
               lamName <- TH.newName "cap"
-              TH.appE [e|withCap|] $
+              TH.appE (TH.appTypeE [e|withCap|] capType) $
                 TH.lam1E (TH.varP lamName) $
                   foldl1' TH.appE (TH.varE fieldName : TH.varE lamName : args)
           TH.clause pats body []
@@ -563,10 +566,13 @@ makeCap capName = do
   instance_decs <- (:[]) <$> do
     rVar <- TH.newName "r"
     capsVar <- TH.newName "caps"
+    let typeableConstraints = [ [t|Typeable $(tyVarBndrT v)|] | v <- extraTyVars ]
     TH.instanceD
-      (TH.cxt [ [t|HasCap $capType $(TH.varT capsVar)|],
-                [t| $(TH.varT rVar) ~ Capabilities $(TH.varT capsVar) $(tyVarBndrT' mVar) |] ])
-      [t| $(TH.conT className) (ReaderT $(TH.varT rVar) $(tyVarBndrT' mVar)) |]
+      (TH.cxt $
+        [ [t|HasCap $capType $(TH.varT capsVar)|],
+          [t| $(TH.varT rVar) ~ Capabilities $(TH.varT capsVar) $(tyVarBndrT' mVar) |]
+        ] ++ typeableConstraints)
+      [t| $classType (ReaderT $(TH.varT rVar) $(tyVarBndrT' mVar)) |]
       [ methodDec methodName fieldName tyArgList
       | (methodName, fieldName, _, tyArgList) <- methodSpecs
       ]
