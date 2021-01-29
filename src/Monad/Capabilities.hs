@@ -534,11 +534,11 @@ makeCap capName = do
         return $ toArgList ty
     return (methodName, fieldName, ty, tyArgList)
   let className = TH.mkName ("Monad" ++ TH.nameBase capName)
-  class_decs <- (:[]) <$>
+  classDec <-
     TH.classD
       (TH.cxt [])
       className
-      [mVar]
+      tyVars
       []
       [ TH.sigD methodName (return ty)
       | (methodName, _, ty, _) <- methodSpecs
@@ -560,17 +560,24 @@ makeCap capName = do
                   foldl1' TH.appE (TH.varE fieldName : TH.varE lamName : args)
           TH.clause pats body []
         ]
-  instance_decs <- (:[]) <$> do
-    rVar <- TH.newName "r"
-    capsVar <- TH.newName "caps"
+  rVar <- TH.newName "r"
+  capsVar <- TH.newName "caps"
+  classConT <- TH.conT className
+  extraTys' <- mapM tyVarBndrT' extraTyVars
+  let classConT' = foldl TH.AppT classConT extraTys'
+  readerT <- [t| (ReaderT $(TH.varT rVar) $(tyVarBndrT' mVar)) |]
+  let tc = TH.AppT classConT' readerT
+  let mkTypeableConstr tv = [t|Typeable $(pure tv)|]
+  let typeables = map mkTypeableConstr extraTys'
+  instanceDec <- do
     TH.instanceD
-      (TH.cxt [ [t|HasCap $capType $(TH.varT capsVar)|],
-                [t| $(TH.varT rVar) ~ Capabilities $(TH.varT capsVar) $(tyVarBndrT' mVar) |] ])
-      [t| $(TH.conT className) (ReaderT $(TH.varT rVar) $(tyVarBndrT' mVar)) |]
+      (TH.cxt $ [ [t|HasCap $capType $(TH.varT capsVar)|],
+                [t| $(TH.varT rVar) ~ Capabilities $(TH.varT capsVar) $(tyVarBndrT' mVar) |] ] <> typeables)
+      (pure tc)
       [ methodDec methodName fieldName tyArgList
       | (methodName, fieldName, _, tyArgList) <- methodSpecs
       ]
-  return (class_decs ++ instance_decs)
+  return [classDec, instanceDec]
   where
     tyVarBndrT (TH.PlainTV name) = TH.varT name
     tyVarBndrT (TH.KindedTV name k) = TH.sigT (TH.varT name) k

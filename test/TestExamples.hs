@@ -1,4 +1,4 @@
-{-# LANGUAGE DataKinds, TypeFamilies, RankNTypes, UndecidableInstances, TemplateHaskell #-}
+{-# LANGUAGE DataKinds, TypeFamilies, RankNTypes, UndecidableInstances, TemplateHaskell, MultiParamTypeClasses, FlexibleInstances #-}
 
 {-# OPTIONS -ddump-splices #-}
 
@@ -80,6 +80,16 @@ testAddingDb = testCase "adding db" $ do
       dbPut "k" "v"
   -- I KNOW THIS IS NOT A PROPER UNIT TEST :)
   -- Check the output in the console manually for now.
+
+-------- Test capability with type parameters -----
+
+-- We test that generated code compiles
+
+data Abc a b m = Abc
+  { _bla :: b -> a -> m String
+  }
+
+makeCap ''Abc
 
 
 -------- Test tree and Main ----------
