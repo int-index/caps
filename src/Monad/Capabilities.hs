@@ -409,7 +409,10 @@ type family HasNoCap cap caps :: Constraint where
 -- | Lookup a capability in a 'Capabilities' map. The 'HasCap' constraint
 -- guarantees that the lookup does not fail.
 getCap :: forall cap m caps. (Typeable cap, HasCap cap caps) => Capabilities caps m -> cap (CapsT caps m)
-getCap (Capabilities m) = maybe (error "getCap: impossible") getCapElem (TypeRepMap.lookup m)
+getCap (Capabilities m) =
+  case TypeRepMap.lookup m of
+    Nothing -> error "getCap: impossible"
+    Just e -> getCapElem e
 
 -- An internal function that adds capabilities.
 unsafeInsertCap ::

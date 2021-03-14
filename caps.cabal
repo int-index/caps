@@ -1,5 +1,5 @@
 name:                caps
-version:             0
+version:             0.1
 synopsis:            Monadic capabilities with late binding
 license:             BSD3
 license-file:        LICENSE
