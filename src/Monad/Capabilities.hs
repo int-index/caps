@@ -577,8 +577,8 @@ makeCap capName = do
       ]
   return (class_decs ++ instance_decs)
   where
-    tyVarBndrT (TH.PlainTV name) = TH.varT name
-    tyVarBndrT (TH.KindedTV name k) = TH.sigT (TH.varT name) k
+    tyVarBndrT (TH.PlainTV name _) = TH.varT name
+    tyVarBndrT (TH.KindedTV name _ k) = TH.sigT (TH.varT name) k
 
-    tyVarBndrT' (TH.PlainTV name) = TH.varT name
-    tyVarBndrT' (TH.KindedTV name _) = TH.varT name
+    tyVarBndrT' (TH.PlainTV name _) = TH.varT name
+    tyVarBndrT' (TH.KindedTV name _ _) = TH.varT name
