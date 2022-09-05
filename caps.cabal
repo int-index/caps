@@ -11,7 +11,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Monad.Capabilities
-  build-depends:       base >=4.10 && <4.15,
+  build-depends:       base >=4.10 && <4.16,
                        transformers,
                        typerep-map >=0.3,
                        template-haskell
@@ -22,7 +22,7 @@ library
                        -fno-warn-partial-type-signatures
 
 test-suite test-examples
-  build-depends:       base >=4.10 && <4.15,
+  build-depends:       base >=4.10 && <4.16,
                        caps,
                        mtl,
                        tasty,
