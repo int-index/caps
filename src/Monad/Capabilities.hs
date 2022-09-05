@@ -2,7 +2,7 @@
              TypeOperators, ConstraintKinds, TypeFamilies, PartialTypeSignatures,
              UndecidableInstances, ViewPatterns, RankNTypes, TypeApplications,
              MultiParamTypeClasses, UndecidableSuperClasses, TemplateHaskell,
-             StandaloneDeriving, DerivingStrategies, GeneralizedNewtypeDeriving #-}
+             StandaloneDeriving, DerivingStrategies, GeneralizedNewtypeDeriving, CPP #-}
 
 {-|
 
@@ -577,8 +577,16 @@ makeCap capName = do
       ]
   return (class_decs ++ instance_decs)
   where
+#if MIN_VERSION_base(4, 15, 1)
     tyVarBndrT (TH.PlainTV name _) = TH.varT name
     tyVarBndrT (TH.KindedTV name _ k) = TH.sigT (TH.varT name) k
 
     tyVarBndrT' (TH.PlainTV name _) = TH.varT name
     tyVarBndrT' (TH.KindedTV name _ _) = TH.varT name
+#else
+    tyVarBndrT (TH.PlainTV name) = TH.varT name
+    tyVarBndrT (TH.KindedTV name k) = TH.sigT (TH.varT name) k
+
+    tyVarBndrT' (TH.PlainTV name) = TH.varT name
+    tyVarBndrT' (TH.KindedTV name _) = TH.varT name
+#endif
